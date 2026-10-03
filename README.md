@@ -139,6 +139,52 @@ export class NotesService {
   A guard that queries a tenant-scoped table must use `runWithTenant`.
 - v0.1 supports HTTP only (not GraphQL or microservices).
 
+### Admin (bypass) client
+
+For admin panels, cross-tenant reports and maintenance jobs, use a **separate
+connection** as a role with `BYPASSRLS`. Postgres enforces the bypass by role,
+so normal app code (even with SQL injection) cannot turn itself into it.
+
+```sql
+CREATE ROLE rowguard_admin LOGIN PASSWORD '...' NOSUPERUSER BYPASSRLS;
+GRANT USAGE ON SCHEMA public TO rowguard_admin;
+GRANT SELECT, UPDATE ON "Note" TO rowguard_admin; -- only what admin code needs
+```
+
+`BYPASSRLS` skips policies, not privileges: grant the least you need.
+
+```ts
+@Module({
+  imports: [
+    RowguardModule.forRoot({
+      tenantFrom: (req) => req.user?.tenantId,
+      client: () => new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) }),
+    }),
+    RowguardAdminModule.forRoot({
+      client: () =>
+        new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.ROWGUARD_ADMIN_DATABASE_URL }) }),
+    }),
+  ],
+})
+export class AppModule {}
+
+@Injectable()
+export class AdminReportService {
+  constructor(@InjectRowguardAdmin() private readonly adminDb: PrismaClient) {}
+}
+```
+
+- Keep the admin credentials in their own variable (`ROWGUARD_ADMIN_DATABASE_URL`),
+  never in `DATABASE_URL`.
+- **Never return admin client results directly to tenant users.** The admin
+  client sees every tenant. The main remaining risk is a human using
+  `@InjectRowguardAdmin()` in a normal endpoint; review every use of it.
+- `RowguardAdminModule` is opt-in. Without it, `@InjectRowguardAdmin()` makes
+  the app fail at boot, not at runtime.
+- It works inside a tenant request (it is not tenant-scoped at all).
+- Without Nest: create a second `PrismaClient` with `ROWGUARD_ADMIN_DATABASE_URL`
+  and do not add `rowguardExtension()` to it.
+
 ## Known limitations (v0.1, in progress)
 
 - Batch `$transaction([...])` is not supported; use the interactive form.

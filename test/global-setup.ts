@@ -32,6 +32,12 @@ export default async function globalSetup() {
       CREATE ROLE app_user LOGIN PASSWORD 'app_user' NOSUPERUSER NOBYPASSRLS;
     EXCEPTION WHEN duplicate_object THEN NULL;
     END $$`);
+  // Admin role for the bypass client: skips RLS, but still limited by GRANTs.
+  await admin.query(`
+    DO $$ BEGIN
+      CREATE ROLE rowguard_admin LOGIN PASSWORD 'rowguard_admin' NOSUPERUSER BYPASSRLS;
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$`);
   const exists = await admin.query(`SELECT 1 FROM pg_database WHERE datname = 'rowguard_prisma'`);
   if (exists.rowCount === 0) await admin.query('CREATE DATABASE rowguard_prisma');
   await admin.end();
