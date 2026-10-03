@@ -99,6 +99,46 @@ The tenant is set once at the start of your transaction. Rules:
 - **The batch form `prisma.$transaction([...])` is not supported** (a type error,
   and rejected at runtime). Use the interactive form.
 
+## NestJS
+
+```ts
+@Module({
+  imports: [
+    RowguardModule.forRoot({
+      tenantFrom: (req) => req.user?.tenantId, // set by your AuthGuard
+      client: () => new PrismaClient({ adapter }),
+    }),
+  ],
+})
+export class AppModule {}
+```
+
+`forRootAsync({ imports, inject, useFactory })` is available too (e.g. with `ConfigService`).
+rowguard adds its Prisma extension itself, always last. Add your own extensions
+inside `client()`.
+
+```ts
+const extend = (c: PrismaClient) => c.$extends(rowguardExtension());
+export type AppPrisma = ReturnType<typeof extend>;
+
+@Injectable()
+export class NotesService {
+  constructor(@InjectRowguard() private readonly prisma: AppPrisma) {}
+  findAll() {
+    return this.prisma.note.findMany(); // no tenantId anywhere
+  }
+}
+```
+
+- `tenantFrom` runs in a global interceptor, **after guards**, so `req.user` exists.
+  It must return a verified value. Never read the tenant from a raw,
+  client-controlled header: RLS protects the tenant it is given, nothing more.
+- `null`, `undefined` or `''` = no tenant: public routes work, database queries throw.
+- If `tenantFrom` throws, the request fails before the handler runs.
+- Guards, middleware and exception filters run **outside** the tenant context.
+  A guard that queries a tenant-scoped table must use `runWithTenant`.
+- v0.1 supports HTTP only (not GraphQL or microservices).
+
 ## Known limitations (v0.1, in progress)
 
 - Batch `$transaction([...])` is not supported; use the interactive form.
@@ -107,6 +147,9 @@ The tenant is set once at the start of your transaction. Rules:
 - Each query costs extra round trips (`BEGIN`, `set_config`, query, `COMMIT`).
 
 ## Development
+
+Requires Node 24.9+ (NestJS 12 is ESM-only; Jest needs `--experimental-vm-modules`
+on Node 24.9+ to `require()` it, which `npm test` passes for you).
 
 ```bash
 npm run db:up      # Postgres in Docker on port 54329
