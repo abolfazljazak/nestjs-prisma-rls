@@ -1,4 +1,5 @@
-import { ConfigurableModuleBuilder, Inject, Module, OnModuleDestroy } from '@nestjs/common';
+import { ConfigurableModuleBuilder, Inject, Logger, Module, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { checkRowguardAdminSetup } from './startup-check';
 
 // The parts of a PrismaClient we rely on.
 interface DisconnectableClient {
@@ -12,6 +13,8 @@ export interface RowguardAdminModuleOptions {
    * No rowguard extension is added: it needs no tenant context.
    */
   client: () => DisconnectableClient;
+  /** Logs a warning if the admin role lacks BYPASSRLS. Default 'warn'. */
+  startupCheck?: 'warn' | 'off';
 }
 
 const { ConfigurableModuleClass, MODULE_OPTIONS_TOKEN } = new ConfigurableModuleBuilder<RowguardAdminModuleOptions>()
@@ -40,9 +43,19 @@ export const InjectRowguardAdmin = () => Inject(ROWGUARD_ADMIN_CLIENT);
   ],
   exports: [ROWGUARD_ADMIN_CLIENT],
 })
-export class RowguardAdminModule extends ConfigurableModuleClass implements OnModuleDestroy {
-  constructor(@Inject(ROWGUARD_ADMIN_CLIENT) private readonly client: DisconnectableClient) {
+export class RowguardAdminModule extends ConfigurableModuleClass implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger('RowguardAdmin');
+
+  constructor(
+    @Inject(ROWGUARD_ADMIN_CLIENT) private readonly client: DisconnectableClient,
+    @Inject(MODULE_OPTIONS_TOKEN) private readonly options: RowguardAdminModuleOptions,
+  ) {
     super();
+  }
+
+  async onModuleInit() {
+    if (this.options.startupCheck === 'off') return;
+    for (const issue of await checkRowguardAdminSetup(this.client as any)) this.logger.warn(issue.message);
   }
 
   async onModuleDestroy() {

@@ -4,14 +4,17 @@ import {
   ExecutionContext,
   Inject,
   Injectable,
+  Logger,
   Module,
   NestInterceptor,
   OnModuleDestroy,
+  OnModuleInit,
 } from '@nestjs/common';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { Observable, Subscription } from 'rxjs';
 import { tenantStorage } from './context';
 import { rowguardExtension } from './prisma-extension';
+import { checkRowguardSetup, SetupCheckOptions } from './startup-check';
 
 // The parts of a PrismaClient we rely on.
 interface PrismaClientLike {
@@ -19,7 +22,7 @@ interface PrismaClientLike {
   $disconnect: () => Promise<void>;
 }
 
-export interface RowguardModuleOptions {
+export interface RowguardModuleOptions extends SetupCheckOptions {
   /**
    * Reads the tenant id from the request. Runs after guards, so `req.user`
    * is available. null/undefined/'' = no tenant: queries will throw.
@@ -29,6 +32,12 @@ export interface RowguardModuleOptions {
   tenantFrom: (req: any) => string | null | undefined;
   /** Creates the PrismaClient. rowguard adds its extension last. */
   client: () => PrismaClientLike;
+  /**
+   * Database setup check at startup. Default 'error': the app does not start
+   * if tenant isolation is off (superuser, BYPASSRLS, table owner, RLS disabled).
+   * 'warn' only logs; 'off' skips it.
+   */
+  startupCheck?: 'error' | 'warn' | 'off';
 }
 
 // Generates RowguardModule.forRoot() and forRootAsync() with the same options.
@@ -88,9 +97,34 @@ export class RowguardInterceptor implements NestInterceptor {
   ],
   exports: [ROWGUARD_CLIENT],
 })
-export class RowguardModule extends ConfigurableModuleClass implements OnModuleDestroy {
-  constructor(@Inject(ROWGUARD_CLIENT) private readonly client: PrismaClientLike) {
+export class RowguardModule extends ConfigurableModuleClass implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger('Rowguard');
+
+  constructor(
+    @Inject(ROWGUARD_CLIENT) private readonly client: PrismaClientLike,
+    @Inject(MODULE_OPTIONS_TOKEN) private readonly options: RowguardModuleOptions,
+  ) {
     super();
+  }
+
+  // Runs once when the app starts (app.init() / app.listen()).
+  async onModuleInit() {
+    const mode = this.options.startupCheck ?? 'error';
+    if (mode === 'off') return;
+
+    // Raw queries are not hooked by the extension, so no tenant context is needed.
+    const result = await checkRowguardSetup(this.client as any, this.options);
+    if (result.excludedTables.length > 0) {
+      this.logger.log(`Tables excluded from RLS checks: ${result.excludedTables.join(', ')}`);
+    }
+    const errors = result.issues.filter((i) => i.level === 'error');
+    for (const issue of result.issues) {
+      if (issue.level === 'warn' || mode === 'warn') this.logger.warn(issue.message);
+    }
+    if (mode === 'error' && errors.length > 0) {
+      const list = errors.map((e) => `- ${e.message}`).join('\n');
+      throw new Error(`rowguard: tenant isolation is not enforced:\n${list}`);
+    }
   }
 
   // Close the connection pool when the app shuts down (app.close()).

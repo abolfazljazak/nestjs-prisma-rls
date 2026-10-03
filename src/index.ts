@@ -6,3 +6,5 @@ export { RowguardModule, RowguardInterceptor, InjectRowguard, ROWGUARD_CLIENT } 
 export type { RowguardModuleOptions } from './rowguard.module';
 export { RowguardAdminModule, InjectRowguardAdmin, ROWGUARD_ADMIN_CLIENT } from './admin.module';
 export type { RowguardAdminModuleOptions } from './admin.module';
+export { checkRowguardSetup, checkRowguardAdminSetup } from './startup-check';
+export type { SetupIssue, SetupCheckOptions, SetupCheckResult, IssueLevel } from './startup-check';

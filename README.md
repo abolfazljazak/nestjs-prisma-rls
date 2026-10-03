@@ -139,6 +139,47 @@ export class NotesService {
   A guard that queries a tenant-scoped table must use `runWithTenant`.
 - v0.1 supports HTTP only (not GraphQL or microservices).
 
+### Startup check
+
+At startup `RowguardModule` inspects the database (read-only, catalog queries)
+and by default **refuses to start** if tenant isolation is off:
+
+| Problem | Level |
+|---|---|
+| App role is a superuser or has `BYPASSRLS` | error |
+| App role owns a tenant table (or inherits from its owner) without `FORCE ROW LEVEL SECURITY` | error |
+| A tenant table has RLS disabled | error |
+| A permissive policy that applies to the app role doesn't reference `app.tenant_id` (e.g. `USING (true)`): permissive policies are OR-ed, so it opens the table | error |
+| RLS enabled but no policy (every query denied) | warn |
+| A restrictive policy doesn't reference `app.tenant_id` (AND-ed: harmless but odd) | warn |
+| No tenant tables found (wrong `tenantColumn` or schema?) | warn |
+
+```ts
+RowguardModule.forRoot({
+  tenantFrom: (req) => req.user?.tenantId,
+  client: () => new PrismaClient({ adapter }),
+  startupCheck: 'error',      // default; 'warn' only logs, 'off' skips
+  tenantColumn: 'tenantId',   // default
+  excludeTables: ['User'],    // has tenantId but intentionally no RLS
+})
+```
+
+- **The policy check is a text heuristic, not a proof.** It only checks that
+  `app.tenant_id` is mentioned. A policy like
+  `USING (current_setting('app.tenant_id', true) IS NOT NULL)` passes the check
+  but lets every tenant see every row. Write your own isolation tests
+  (tenant A cannot read, update, delete or insert tenant B's rows).
+- A **tenant table** is any table with the `tenantColumn`. **Every tenant table
+  must have its own `tenantId` column**, even child tables (e.g. `Comment`
+  linked through `noteId`): a table without it is invisible to the check *and*
+  has no isolation.
+- `excludeTables` is for tables like `User` that guards read before the tenant
+  is known. Excluded tables are skipped but logged once at startup.
+- `RowguardAdminModule` logs a warning if the admin role lacks `BYPASSRLS`
+  (or is a superuser).
+- Without Nest: `checkRowguardSetup(prisma)` and `checkRowguardAdminSetup(adminPrisma)`
+  return the issues, e.g. for a CI step.
+
 ### Admin (bypass) client
 
 For admin panels, cross-tenant reports and maintenance jobs, use a **separate

@@ -20,10 +20,13 @@ export interface TransactionOptions {
 // an interactive transaction (same list as Prisma's ITXClientDenyList).
 export type TransactionClient<C> = Omit<C, '$connect' | '$disconnect' | '$on' | '$transaction' | '$extends' | '$use'>;
 
+/** The Postgres setting the RLS policies read. */
+export const TENANT_SETTING = 'app.tenant_id';
+
 const setTenant = (client: RawCapableClient, tenantId: string) =>
   // ${tenantId} becomes a bind parameter ($1), not string concatenation.
   // `true` = local to the current transaction.
-  client.$executeRaw`SELECT set_config('app.tenant_id', ${tenantId}, true)`;
+  client.$executeRaw`SELECT set_config(${TENANT_SETTING}, ${tenantId}, true)`;
 
 /**
  * Prisma Client extension for tenant isolation with Postgres RLS.
