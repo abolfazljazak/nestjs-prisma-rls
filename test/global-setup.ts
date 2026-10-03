@@ -6,7 +6,7 @@ import { Client } from 'pg';
 const DEFAULT_URL = 'postgresql://postgres:postgres@localhost:54329/rowguard_prisma';
 
 // Refuse to touch anything that isn't the local test database.
-function assertTestDatabase(url: string) {
+export function assertTestDatabase(url: string) {
   const { hostname, pathname } = new URL(url);
   const database = pathname.slice(1);
   if (!['localhost', '127.0.0.1'].includes(hostname) || database !== 'rowguard_prisma') {

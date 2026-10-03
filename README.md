@@ -226,12 +226,56 @@ export class AdminReportService {
 - Without Nest: create a second `PrismaClient` with `ROWGUARD_ADMIN_DATABASE_URL`
   and do not add `rowguardExtension()` to it.
 
+## Performance
+
+Measured with `npm run bench` (full results: [bench/results.md](bench/results.md)).
+Localhost Docker on a laptop (i7-1185G7), Postgres 17, Node 24, 100k rows.
+**On localhost round trips are cheap; against a real database server the
+overhead below grows with your network latency.**
+
+Every model query outside your own `$transaction` becomes 4 statements instead
+of 1 (counted at the driver): `BEGIN`, `set_config`, the query, `COMMIT`.
+
+| Scenario | p50 per query | vs. plain Prisma |
+|---|---|---|
+| Plain Prisma read (no RLS) | 0.98 ms | baseline |
+| RLS policy only (tenant already set) | 0.99 ms | +0.00 ms (within noise) |
+| rowguard read, one query per call | 3.76 ms | **+2.78 ms, ~3.8x** |
+| rowguard read, 10 queries in one `$transaction` | 1.46 ms | +0.48 ms (within noise) |
+| Plain Prisma create | 2.96 ms | baseline |
+| rowguard create, one per call | 5.29 ms | **+2.34 ms** |
+| rowguard create, 10 in one `$transaction` | 1.99 ms | faster than baseline* |
+
+* Not a rowguard speedup: 10 inserts share one `COMMIT` (one disk flush) instead of 10.
+
+Throughput (50 concurrent workers, pool of 10): plain reads **7700/s**, rowguard
+one-query-per-call **542/s** (about 14x lower), rowguard in `$transaction`
+batches of 10 **2227/s**. The drop is larger than the latency ratio. A Prisma
+batch transaction of two statements *without* rowguard reached a similar rate
+in a separate run, so the cost comes from the transaction-per-query mechanism
+rowguard relies on; the exact reason it is worse than linear was not determined.
+
+What this means:
+
+- The RLS policy itself is effectively free when the tenant column is indexed
+  (the plan uses `Bitmap Index Scan on "Note_tenantId_idx"`). Casting the
+  column instead of the setting turns it into a sequential scan.
+- The cost is round trips and connection hold time. Rough rule:
+  **extra latency per query ≈ 3 × your network round-trip time.**
+- To reduce it, group related queries in one `prisma.$transaction(async (tx) => ...)`:
+  one `set_config` and one `BEGIN`/`COMMIT` for all of them.
+- Size your connection pool for connections being held ~4x longer.
+- `set_config(..., true)` is transaction-scoped: the tenant is gone after
+  `COMMIT` (tested). This makes rowguard compatible with **PgBouncer in
+  transaction mode**, where consecutive transactions may run on different
+  server connections.
+
 ## Known limitations (v0.1, in progress)
 
 - Batch `$transaction([...])` is not supported; use the interactive form.
 - `$queryRaw` / `$executeRaw` are not wrapped: outside a transaction they run
   without a tenant, so RLS returns no rows (fails closed). Run them on `tx`.
-- Each query costs extra round trips (`BEGIN`, `set_config`, query, `COMMIT`).
+- Each query outside a `$transaction` costs 3 extra round trips; see Performance.
 
 ## Development
 

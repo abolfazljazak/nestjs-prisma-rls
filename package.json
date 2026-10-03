@@ -18,7 +18,8 @@
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down",
     "pretest": "prisma generate",
-    "db:reset": "prisma migrate reset --force"
+    "db:reset": "prisma migrate reset --force",
+    "bench": "tsx bench/bench.ts"
   },
   "keywords": [
     "nestjs",
@@ -51,6 +52,7 @@
     "rxjs": "^7.8.2",
     "supertest": "^7.3.1",
     "ts-jest": "^29.4.14",
+    "tsx": "^4.23.15",
     "typescript": "^6.0.3"
   }
 }

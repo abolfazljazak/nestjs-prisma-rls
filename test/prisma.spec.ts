@@ -137,3 +137,11 @@ it('tenants used one after another on one pooled connection do not leak', async 
   const a2 = await asA(() => prisma.note.findMany());
   expect([a.length, b.length, a2.length]).toEqual([2, 1, 2]);
 });
+
+it('the tenant setting does not survive COMMIT on the same connection (PgBouncer transaction mode safe)', async () => {
+  await asA(() => prisma.note.findMany()); // rowguard: BEGIN; set_config(..., true); query; COMMIT
+  // Same single pooled connection, now outside any transaction, without rowguard:
+  const [row] = await base.$queryRaw<{ v: string | null }[]>`SELECT current_setting('app.tenant_id', true) AS v`;
+  expect(row.v).toBe(''); // defined-but-empty after a local set_config: no tenant left behind
+  expect(await base.note.count()).toBe(0); // and RLS shows nothing
+});
