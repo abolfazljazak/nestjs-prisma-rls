@@ -8,6 +8,8 @@
   detect which ids exist. If you use 0.1.0, check your schema.
 - Startup check: an app role that owns a tenant table now gets a warning even
   with `FORCE ROW LEVEL SECURITY` (the owner can disable RLS or drop policies).
+- Peer dependency ranges narrowed to what CI tests: `@prisma/client` `^7.10.0`
+  (was `^7.0.0`), `rxjs` `^7` (was `>=7`).
 
 ## 0.1.0 (2026-10-04)
 

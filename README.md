@@ -18,7 +18,8 @@ You never write `where: { tenantId }`: Postgres enforces tenant isolation itself
 |---|---|
 | Node.js | 22.12+, 24 |
 | NestJS | 11, 12 |
-| Prisma | 7 (with `@prisma/adapter-pg`) |
+| Prisma | 7.10+ (with `@prisma/adapter-pg`) |
+| RxJS | 7 |
 | PostgreSQL | tested on 17 |
 
 ## Install
@@ -28,6 +29,7 @@ npm install nestjs-prisma-rls
 ```
 
 Peer dependencies: `@nestjs/common`, `@nestjs/core`, `@prisma/client`, `rxjs`.
+The ranges in `package.json` only include versions tested in CI.
 
 ## Quick start
 
