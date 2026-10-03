@@ -113,13 +113,24 @@ export async function checkPrismaRlsSetup(
       issues.push({ level: 'error', code: 'RLS_DISABLED', table: t.table, message: `Table "${t.table}" has "${column}" but RLS is not enabled.` });
       continue;
     }
-    if (t.owner_privs && !t.force && !role.superuser) {
-      issues.push({
-        level: 'error',
-        code: 'TABLE_OWNER',
-        table: t.table,
-        message: `Role "${role.name}" owns "${t.table}" (or inherits from its owner "${t.owner}"): RLS does not apply. Use a non-owner role or FORCE ROW LEVEL SECURITY.`,
-      });
+    if (t.owner_privs && !role.superuser) {
+      if (!t.force) {
+        issues.push({
+          level: 'error',
+          code: 'TABLE_OWNER',
+          table: t.table,
+          message: `Role "${role.name}" owns "${t.table}" (or inherits from its owner "${t.owner}"): RLS does not apply. Use a non-owner role.`,
+        });
+      } else {
+        // FORCE makes RLS apply to the owner, but the owner can still run
+        // ALTER TABLE ... DISABLE ROW LEVEL SECURITY or DROP POLICY.
+        issues.push({
+          level: 'warn',
+          code: 'TABLE_OWNER_FORCED',
+          table: t.table,
+          message: `Role "${role.name}" owns "${t.table}" (or inherits from its owner "${t.owner}"). FORCE ROW LEVEL SECURITY applies RLS to it, but the owner can still disable RLS or drop the policy (e.g. via SQL injection). Use a non-owner role for the app.`,
+        });
+      }
     }
 
     const own = policies.filter((p) => p.table === t.table);

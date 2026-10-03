@@ -6,6 +6,8 @@
   `(childFk, tenantId) -> parent(id, tenantId)`. Postgres checks foreign keys
   without RLS, so a plain FK let one tenant reference another tenant's rows and
   detect which ids exist. If you use 0.1.0, check your schema.
+- Startup check: an app role that owns a tenant table now gets a warning even
+  with `FORCE ROW LEVEL SECURITY` (the owner can disable RLS or drop policies).
 
 ## 0.1.0 (2026-10-04)
 

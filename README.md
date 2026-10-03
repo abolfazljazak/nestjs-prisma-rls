@@ -286,6 +286,7 @@ and by default **refuses to start** if tenant isolation is off:
 | App role owns a tenant table (or inherits from its owner) without `FORCE ROW LEVEL SECURITY` | error |
 | A tenant table has RLS disabled | error |
 | A permissive policy that applies to the app role doesn't reference `app.tenant_id` (e.g. `USING (true)`): permissive policies are OR-ed, so it opens the table | error |
+| App role owns a tenant table **with** `FORCE ROW LEVEL SECURITY`: RLS applies, but the owner can still disable RLS or drop the policy (e.g. via SQL injection). Use a non-owner role | warn |
 | RLS enabled but no policy (every query denied) | warn |
 | A restrictive policy doesn't reference `app.tenant_id` (AND-ed: harmless but odd) | warn |
 | No tenant tables found (wrong `tenantColumn` or schema?) | warn |

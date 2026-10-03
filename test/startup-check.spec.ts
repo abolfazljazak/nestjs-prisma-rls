@@ -87,12 +87,20 @@ describe('app role', () => {
     expect(codes(await check(adminUser))).toContain('ROLE_BYPASSRLS');
   });
 
-  it('table owner without FORCE: error; with FORCE: fine', async () => {
+  it('table owner without FORCE: error', async () => {
     await scenario(`${goodTable}; ALTER TABLE "Note" OWNER TO sc_owner`);
     expect(codes(await check(scOwner))).toEqual(['TABLE_OWNER']);
+  });
 
-    await owner.$executeRawUnsafe(`ALTER TABLE ${SCHEMA}."Note" FORCE ROW LEVEL SECURITY`);
-    expect((await check(scOwner)).issues).toEqual([]);
+  it('table owner WITH FORCE: warn, because the owner can still turn RLS off', async () => {
+    await scenario(`${goodTable}; ALTER TABLE "Note" OWNER TO sc_owner; ALTER TABLE "Note" FORCE ROW LEVEL SECURITY`);
+    // The danger is real: the owner role itself can disable RLS (e.g. via SQL injection).
+    await scOwner.$executeRawUnsafe(`ALTER TABLE ${SCHEMA}."Note" DISABLE ROW LEVEL SECURITY`);
+    await owner.$executeRawUnsafe(`ALTER TABLE ${SCHEMA}."Note" ENABLE ROW LEVEL SECURITY`);
+
+    const r = await check(scOwner);
+    expect(r.issues).toEqual([expect.objectContaining({ level: 'warn', code: 'TABLE_OWNER_FORCED', table: 'Note' })]);
+    expect(r.issues[0].message).toMatch(/non-owner role/);
   });
 
   it('member of the owner role really bypasses RLS, and is reported', async () => {
