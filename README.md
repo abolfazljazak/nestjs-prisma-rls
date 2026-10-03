@@ -151,6 +151,23 @@ migration on every run. For a `text` column, use:
 tenantId String @default(dbgenerated("current_setting('app.tenant_id'::text, true)"))
 ```
 
+**Integer tenant ids** (`Int` / `BigInt` columns): cast the setting to the
+column type. `tenantFrom` may return a number; it is converted with `String()`
+(`runWithTenant` takes a string: `runWithTenant(String(id), ...)`).
+
+```prisma
+tenantId Int @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::integer"))
+```
+
+```sql
+CREATE POLICY tenant_isolation ON "Note"
+  USING ("tenantId" = NULLIF(current_setting('app.tenant_id', true), '')::int)
+  WITH CHECK ("tenantId" = NULLIF(current_setting('app.tenant_id', true), '')::int);
+```
+
+For `BigInt` use `::bigint` (and `...::bigint` in `dbgenerated`). Integer ids are
+easy to guess, which makes a verified `tenantFrom` even more important.
+
 ### 2. RLS policy (add by hand to the migration SQL)
 
 Prisma schema cannot express policies. Run `prisma migrate dev --create-only`,
@@ -272,6 +289,7 @@ export class NotesService {
   It must return a verified value. Never read the tenant from a raw,
   client-controlled header: RLS protects the tenant it is given, nothing more.
 - `null`, `undefined` or `''` = no tenant: public routes work, database queries throw.
+- A number is converted with `String()`; `NaN`, `Infinity`, objects and booleans are rejected.
 - If `tenantFrom` throws, the request fails before the handler runs.
 - Guards, middleware and exception filters run **outside** the tenant context.
   A guard that queries a tenant-scoped table must use `runWithTenant`.

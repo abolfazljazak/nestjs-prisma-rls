@@ -27,9 +27,10 @@ export interface PrismaRlsModuleOptions extends SetupCheckOptions {
    * Reads the tenant id from the request. Runs after guards, so `req.user`
    * is available. null/undefined/'' = no tenant: queries will throw.
    * Must return a verified value (e.g. from the authenticated user), never
-   * a raw client-controlled header.
+   * a raw client-controlled header. Numbers (integer tenant ids) are
+   * converted with String().
    */
-  tenantFrom: (req: any) => string | null | undefined;
+  tenantFrom: (req: any) => string | number | null | undefined;
   /** Creates the PrismaClient. nestjs-prisma-rls adds its extension last. */
   client: () => PrismaClientLike;
   /**
@@ -63,14 +64,20 @@ export class PrismaRlsInterceptor implements NestInterceptor {
 
     // If tenantFrom throws, the error goes to Nest's exception handling and
     // the handler never runs.
-    const tenantId = this.options.tenantFrom(context.switchToHttp().getRequest());
+    const value: unknown = this.options.tenantFrom(context.switchToHttp().getRequest());
 
-    if (tenantId === null || tenantId === undefined || (typeof tenantId === 'string' && tenantId.trim() === '')) {
+    if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) {
       return next.handle(); // public route, or not logged in: no tenant context
     }
-    if (typeof tenantId !== 'string') {
-      throw new TypeError('nestjs-prisma-rls: tenantFrom must return a string, null or undefined');
+    // Integer tenant ids: set_config needs text, so convert. NaN/Infinity would
+    // become "NaN"/"Infinity", which is never a real tenant: reject them.
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      throw new TypeError(`nestjs-prisma-rls: tenantFrom returned ${value}, not a valid tenant id`);
     }
+    if (typeof value !== 'string' && typeof value !== 'number') {
+      throw new TypeError('nestjs-prisma-rls: tenantFrom must return a string, a number, null or undefined');
+    }
+    const tenantId = String(value);
 
     // Subscribe inside run(): the handler executes when subscribed, so it
     // (and everything it awaits) sees the tenant. Returning `sub.unsubscribe`

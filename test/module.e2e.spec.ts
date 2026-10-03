@@ -16,7 +16,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { defer, Observable } from 'rxjs';
 import request from 'supertest';
 import { setTimeout as sleep } from 'timers/promises';
-import { InjectPrismaRls, prismaRlsExtension, PRISMA_RLS_CLIENT, PrismaRlsModule, PrismaRlsModuleOptions } from '../src';
+import { getTenantId, InjectPrismaRls, prismaRlsExtension, PRISMA_RLS_CLIENT, PrismaRlsModule, PrismaRlsModuleOptions } from '../src';
 import { createTestTenants, deleteTenantData, dropTestTenants } from './helpers';
 import { PrismaClient } from './prisma/generated/client';
 
@@ -52,6 +52,12 @@ let handlerCalls = 0;
 @Controller()
 class NotesController {
   constructor(@InjectPrismaRls() private readonly prisma: AppPrisma) {}
+
+  @Get('whoami')
+  whoami() {
+    handlerCalls++;
+    return { tenantId: getTenantId() };
+  }
 
   @Get('public')
   public() {
@@ -184,6 +190,24 @@ it('database route without a tenant fails closed (500, no data)', async () => {
 describe('tenantFrom edge cases', () => {
   let edgeApp: INestApplication;
   afterEach(() => edgeApp?.close());
+
+  it('a number (integer tenant ids) is accepted and converted to a string', async () => {
+    edgeApp = await createApp(() => 42 as any);
+    const res = await request(edgeApp.getHttpServer()).get('/whoami').expect(200);
+    expect(res.body).toEqual({ tenantId: '42' });
+  });
+
+  it.each([
+    ['NaN', NaN],
+    ['Infinity', Infinity],
+    ['an object', { id: 1 }],
+    ['a boolean', true],
+  ])('%s is rejected before the handler runs', async (_label, value) => {
+    edgeApp = await createApp(() => value as any);
+    handlerCalls = 0;
+    await request(edgeApp.getHttpServer()).get('/whoami').expect(500);
+    expect(handlerCalls).toBe(0);
+  });
 
   it("'' is treated as no tenant (fail closed)", async () => {
     edgeApp = await createApp(() => '');

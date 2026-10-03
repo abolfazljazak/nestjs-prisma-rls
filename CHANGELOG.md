@@ -10,6 +10,9 @@
   with `FORCE ROW LEVEL SECURITY` (the owner can disable RLS or drop policies).
 - Peer dependency ranges narrowed to what CI tests: `@prisma/client` `^7.10.0`
   (was `^7.0.0`), `rxjs` `^7` (was `>=7`).
+- `tenantFrom` may return a number (integer tenant ids), converted with
+  `String()`. Previously every request failed with a TypeError. README shows the
+  `::integer` / `::bigint` policy and default forms.
 
 ## 0.1.0 (2026-10-04)
 
