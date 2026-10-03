@@ -77,11 +77,33 @@ await runWithTenant(tenantId, () => prisma.note.findMany()); // only this tenant
 
 Without a tenant context every query throws `MissingTenantError`.
 
+### Transactions
+
+```ts
+await runWithTenant(tenantId, () =>
+  prisma.$transaction(async (tx) => {
+    await tx.note.create({ data: { title: 'a' } });
+    return tx.$queryRaw`SELECT count(*) FROM "Note"`; // raw SQL is tenant-scoped here too
+  }),
+);
+```
+
+The tenant is set once at the start of your transaction. Rules:
+
+- **Add rowguard as the last extension.** `tx` comes from the client below
+  rowguard, so extensions added after it are missing on `tx` at runtime.
+  `base.$extends(other).$extends(rowguardExtension())` is correct.
+- **Use `tx`, not `prisma`, inside the callback.** A query on the outer
+  `prisma` still gets the right tenant, but runs in its own transaction and
+  is not rolled back with yours.
+- **The batch form `prisma.$transaction([...])` is not supported** (a type error,
+  and rejected at runtime). Use the interactive form.
+
 ## Known limitations (v0.1, in progress)
 
-- Calling `prisma.$transaction(...)` yourself is not supported yet.
-- `$queryRaw` / `$executeRaw` are not wrapped: they run without a tenant, so
-  RLS returns no rows (fails closed) rather than leaking.
+- Batch `$transaction([...])` is not supported; use the interactive form.
+- `$queryRaw` / `$executeRaw` are not wrapped: outside a transaction they run
+  without a tenant, so RLS returns no rows (fails closed). Run them on `tx`.
 - Each query costs extra round trips (`BEGIN`, `set_config`, query, `COMMIT`).
 
 ## Development
