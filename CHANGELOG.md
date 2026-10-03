@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Security (docs):** foreign keys between tenant tables must be composite,
+  `(childFk, tenantId) -> parent(id, tenantId)`. Postgres checks foreign keys
+  without RLS, so a plain FK let one tenant reference another tenant's rows and
+  detect which ids exist. If you use 0.1.0, check your schema.
+
 ## 0.1.0 (2026-10-04)
 
 First early release.

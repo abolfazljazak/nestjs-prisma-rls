@@ -54,10 +54,13 @@ Peer dependencies: `@nestjs/common`, `@nestjs/core`, `@prisma/client`, `rxjs`.
      WITH CHECK ("tenantId" = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
    ```
 
-3. Connect the app as a role that is **not** a superuser, not the table owner,
-   and has no `BYPASSRLS` ([details](#3-database-roles)).
+3. Relations between tenant tables use composite foreign keys on `(id, tenantId)`
+   ([details](#3-relations-between-tenant-tables-composite-foreign-keys-required)).
 
-4. Register the module:
+4. Connect the app as a role that is **not** a superuser, not the table owner,
+   and has no `BYPASSRLS` ([details](#4-database-roles)).
+
+5. Register the module:
 
    ```ts
    @Module({
@@ -71,7 +74,7 @@ Peer dependencies: `@nestjs/common`, `@nestjs/core`, `@prisma/client`, `rxjs`.
    export class AppModule {}
    ```
 
-5. Inject and query, with no tenant filter:
+6. Inject and query, with no tenant filter:
 
    ```ts
    constructor(@InjectPrismaRls() private readonly prisma: AppPrisma) {}
@@ -100,6 +103,10 @@ What it does **not** do, and you must:
 - **Write correct policies.** The startup check is a text heuristic; test that
   tenant A cannot read, update, delete or insert tenant B's rows in your app.
 - **Cover every table.** Each tenant table needs its own `tenantId` column and policy.
+- **Use composite foreign keys between tenant tables.** Foreign key checks
+  ignore RLS: with `Comment.noteId -> Note.id` alone, one tenant can reference
+  another tenant's rows and probe which ids exist. Reference `(id, tenantId)`
+  instead ([details](#3-relations-between-tenant-tables-composite-foreign-keys-required)).
 - **Use the admin client carefully.** `@InjectPrismaRlsAdmin()` bypasses
   isolation; never return its results directly to tenant users.
 - Raw SQL outside a transaction runs without a tenant (it returns no rows rather
@@ -158,7 +165,35 @@ CREATE POLICY tenant_isolation ON "Note"
 - `NULLIF`: on a reused pooled connection the setting is `''`, not `NULL`,
   and `''::uuid` throws. For `text` columns `NULLIF` is not needed.
 
-### 3. Database roles
+### 3. Relations between tenant tables: composite foreign keys (required)
+
+**Postgres checks foreign keys without applying RLS.** With a plain foreign key
+`Comment.noteId -> Note.id`, tenant B can create a comment on tenant A's note,
+and the error/no-error difference reveals which ids exist in other tenants.
+
+Every relation between two tenant tables must include `tenantId` in the
+foreign key, so the parent row must belong to the same tenant:
+
+```prisma
+model Note {
+  id       Int       @id @default(autoincrement())
+  tenantId String    @default(dbgenerated("...")) @db.Uuid
+  comments Comment[]
+
+  @@unique([id, tenantId]) // target of the composite foreign key
+}
+
+model Comment {
+  id       Int    @id @default(autoincrement())
+  tenantId String @default(dbgenerated("...")) @db.Uuid
+  noteId   Int
+  note     Note   @relation(fields: [noteId, tenantId], references: [id, tenantId])
+}
+```
+
+Nested creates still work: Prisma copies the parent's `tenantId` into the child.
+
+### 4. Database roles
 
 RLS does **not** apply to superusers or to the table owner. Use two roles:
 

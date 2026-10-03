@@ -26,6 +26,8 @@ model Note {
   title    String
   comments Comment[]
 
+  // Target of composite foreign keys from child tenant tables (see Comment).
+  @@unique([id, tenantId])
   @@index([tenantId])
 }
 
@@ -34,7 +36,10 @@ model Comment {
   tenantId String @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::uuid")) @db.Uuid
   tenant   Tenant @relation(fields: [tenantId], references: [id])
   noteId   Int
-  note     Note   @relation(fields: [noteId], references: [id])
+  // Composite FK: Postgres checks foreign keys WITHOUT RLS, so a plain
+  // noteId -> Note.id would let one tenant attach rows to another tenant's
+  // note. Including tenantId forces the parent to belong to the same tenant.
+  note     Note   @relation(fields: [noteId, tenantId], references: [id, tenantId])
   body     String
 
   @@index([tenantId])

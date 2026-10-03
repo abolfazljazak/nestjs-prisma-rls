@@ -142,3 +142,29 @@ it('the tenant setting does not survive COMMIT on the same connection (PgBouncer
   expect(row.v).toBe(''); // defined-but-empty after a local set_config: no tenant left behind
   expect(await base.note.count()).toBe(0); // and RLS shows nothing
 });
+
+describe('relations between tenant tables (foreign keys)', () => {
+  // Postgres checks foreign keys WITHOUT applying RLS. A plain FK
+  // Comment.noteId -> Note.id lets tenant B attach rows to tenant A's note.
+  const noteOfA = () => admin.note.findFirstOrThrow({ where: { tenantId: TENANT_A } });
+
+  it("tenant B cannot create a Comment pointing to tenant A's Note", async () => {
+    const note = await noteOfA();
+    await expect(
+      runWithTenant(TENANT_B, () => prisma.comment.create({ data: { body: 'x', noteId: note.id } })),
+    ).rejects.toThrow();
+    expect(await admin.comment.count({ where: { noteId: note.id } })).toBe(0);
+  });
+
+  it("the error for another tenant's note id is the same as for a missing id (no existence leak)", async () => {
+    const note = await noteOfA();
+    const attempt = (noteId: number) =>
+      runWithTenant(TENANT_B, () => prisma.comment.create({ data: { body: 'x', noteId } })).then(
+        () => 'created',
+        (err: { code?: string }) => err.code,
+      );
+    const otherTenant = await attempt(note.id);
+    const missing = await attempt(2_000_000_000);
+    expect(otherTenant).toBe(missing);
+  });
+});
