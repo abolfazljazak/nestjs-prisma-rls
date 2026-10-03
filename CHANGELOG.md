@@ -13,6 +13,9 @@
 - `tenantFrom` may return a number (integer tenant ids), converted with
   `String()`. Previously every request failed with a TypeError. README shows the
   `::integer` / `::bigint` policy and default forms.
+- Docs: global interceptors registered before `PrismaRlsModule` run without a
+  tenant context (Known limitations).
+- Docs: why the test script needs `--experimental-vm-modules`.
 
 ## 0.1.0 (2026-10-04)
 

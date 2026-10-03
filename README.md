@@ -291,7 +291,7 @@ export class NotesService {
 - `null`, `undefined` or `''` = no tenant: public routes work, database queries throw.
 - A number is converted with `String()`; `NaN`, `Infinity`, objects and booleans are rejected.
 - If `tenantFrom` throws, the request fails before the handler runs.
-- Guards, middleware and exception filters run **outside** the tenant context.
+- Guards, middleware, exception filters, and global interceptors registered before this module, run **outside** the tenant context.
   A guard that queries a tenant-scoped table must use `runWithTenant`.
 - v0.1 supports HTTP only (not GraphQL or microservices).
 
@@ -429,6 +429,12 @@ What this means:
 
 ## Known limitations (v0.1)
 
+- **Global interceptors registered before `PrismaRlsModule` have no tenant
+  context.** Nest runs global interceptors in registration order (module import
+  order). A global interceptor from a module imported *before*
+  `PrismaRlsModule` runs outside the tenant context: its database queries throw
+  `MissingTenantError`. Import `PrismaRlsModule` first, or wrap that code in
+  `runWithTenant`. (Tested in `test/interceptor-order.e2e.spec.ts`.)
 - Batch `$transaction([...])` is not supported; use the interactive form.
 - `$queryRaw` / `$executeRaw` are not wrapped: outside a transaction they run
   without a tenant, so RLS returns no rows (fails closed). Run them on `tx`.
