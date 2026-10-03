@@ -436,8 +436,19 @@ What this means:
 
 ## Development
 
-Requires Node 24.9+ (NestJS 12 is ESM-only; Jest needs `--experimental-vm-modules`
-on Node 24.9+ to `require()` it, which `npm test` passes for you).
+Requires Node 24.9+. `npm test` runs Jest with `--experimental-vm-modules`, and
+it can't be removed:
+
+- NestJS 12 is ESM-only. The tests are CommonJS (ts-jest), so Jest has to
+  `require()` an ES module.
+- Jest does that only when `vm.SourceTextModule` exists (Node 24.9+), and Node
+  exposes it only with `--experimental-vm-modules`. Without the flag, `typeof
+  vm.SourceTextModule` is `undefined` and every NestJS test file fails with
+  "Must use import to load ES Module" (checked on Node 24.21).
+- This is not "Jest in ESM mode": test code stays CommonJS. The flag only turns
+  on the API Jest uses for `require(esm)`. On Node 22 / NestJS 11 (CommonJS)
+  it is harmless. It prints an ExperimentalWarning, which is expected.
+- Users of the package don't need it: plain Node 22.12+ supports `require(esm)`.
 
 ```bash
 npm run db:up      # Postgres in Docker on port 54329
