@@ -46,7 +46,7 @@ const currentRole = async (client: RawQueryClient) =>
   )[0];
 
 /** Checks the role and tables used by the normal (tenant-scoped) client. */
-export async function checkRowguardSetup(
+export async function checkPrismaRlsSetup(
   client: RawQueryClient,
   options: SetupCheckOptions = {},
 ): Promise<SetupCheckResult> {
@@ -157,7 +157,7 @@ export async function checkRowguardSetup(
 }
 
 /** Checks the role used by the admin (bypass) client. */
-export async function checkRowguardAdminSetup(client: RawQueryClient): Promise<SetupIssue[]> {
+export async function checkPrismaRlsAdminSetup(client: RawQueryClient): Promise<SetupIssue[]> {
   const role = await currentRole(client);
   if (role.superuser) {
     return [{ level: 'warn', code: 'ADMIN_SUPERUSER', message: `Admin role "${role.name}" is a superuser: more privilege than BYPASSRLS needs.` }];

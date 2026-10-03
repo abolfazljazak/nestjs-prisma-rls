@@ -1,4 +1,4 @@
-// Pure Postgres RLS tests: no rowguard code involved.
+// Pure Postgres RLS tests: no nestjs-prisma-rls code involved.
 // They prove the policy in setup.sql isolates tenants on its own.
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -11,7 +11,7 @@ const TENANT_B = '22222222-2222-2222-2222-222222222222';
 const admin = new Client({ ...HOST, user: 'postgres', password: 'postgres' });
 const app = new Client({ ...HOST, user: 'app_user', password: 'app_user' });
 
-// What rowguard will do later: set the tenant for one transaction only.
+// What nestjs-prisma-rls will do later: set the tenant for one transaction only.
 // The `true` argument of set_config means "local to this transaction" (like SET LOCAL).
 async function asTenant(tenantId: string, sql: string, params: unknown[] = []) {
   await app.query('BEGIN');

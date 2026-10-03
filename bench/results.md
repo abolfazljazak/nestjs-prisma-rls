@@ -1,4 +1,4 @@
-# rowguard benchmark results
+# nestjs-prisma-rls benchmark results
 
 - Date: 2026-10-03
 - Machine: 11th Gen Intel(R) Core(TM) i7-1185G7 @ 3.00GHz, 8 threads, 16 GB RAM
@@ -12,11 +12,11 @@
 |---|---|---|---|---|---|---|
 | A-read | plain Prisma, BYPASSRLS role, no transaction | 0.997 / 1.029 / 0.919 | 0.981 | 0.110 | 1.633 | 1.0 |
 | B-read | RLS only: queries inside one transaction with one set_config | 0.938 / 0.990 / 1.028 | 0.985 | 0.090 | 1.510 | 1.0 |
-| C-read | rowguard, one query per call | 3.762 / 3.782 / 3.731 | 3.758 | 0.050 | 5.354 | 4.0 |
-| D-read | rowguard, 10 queries per user $transaction (per query) | 1.272 / 1.241 / 1.872 | 1.462 | 0.631 | 2.096 | 1.3 |
+| C-read | nestjs-prisma-rls, one query per call | 3.762 / 3.782 / 3.731 | 3.758 | 0.050 | 5.354 | 4.0 |
+| D-read | nestjs-prisma-rls, 10 queries per user $transaction (per query) | 1.272 / 1.241 / 1.872 | 1.462 | 0.631 | 2.096 | 1.3 |
 | A-write | plain Prisma create, superuser, explicit tenantId | 2.980 / 2.975 / 2.913 | 2.956 | 0.067 | 4.085 | 1.0 |
-| C-write | rowguard create (dbgenerated default + WITH CHECK) | 5.528 / 5.637 / 4.708 | 5.291 | 0.929 | 8.072 | 4.0 |
-| D-write | rowguard, 10 creates per user $transaction (per create) | 1.984 / 2.018 / 1.964 | 1.989 | 0.053 | 2.896 | 1.3 |
+| C-write | nestjs-prisma-rls create (dbgenerated default + WITH CHECK) | 5.528 / 5.637 / 4.708 | 5.291 | 0.929 | 8.072 | 4.0 |
+| D-write | nestjs-prisma-rls, 10 creates per user $transaction (per create) | 1.984 / 2.018 / 1.964 | 1.989 | 0.053 | 2.896 | 1.3 |
 
 spread = max - min of the 3 run p50s.
 
@@ -40,7 +40,7 @@ spread = max - min of the 3 run p50s.
 
 ## Index use with the RLS policy
 
-Policy casting the setting (rowguard README form):
+Policy casting the setting (nestjs-prisma-rls README form):
 ```
 Bitmap Heap Scan on "Note"  (cost=914.46..4027.11 rows=79762 width=30)
   Recheck Cond: ("tenantId" = (NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::uuid)

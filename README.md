@@ -1,9 +1,110 @@
-# rowguard
+# nestjs-prisma-rls
+
+> **v0.1 — early release.** The API may change before 1.0. Test tenant
+> isolation in your own app before relying on it in production.
 
 Postgres Row-Level Security (RLS) multi-tenancy for NestJS + Prisma.
 You never write `where: { tenantId }`: Postgres enforces tenant isolation itself.
 
-> Status: work in progress (v0.1 not released yet).
+- **Isolation in the database.** A forgotten filter can't leak data: the RLS
+  policy filters every query, and writes for another tenant are rejected.
+- **Fails closed.** No tenant context means queries throw, never run unfiltered.
+- **Checks your setup at startup.** Refuses to start if RLS would be silently off
+  (superuser, `BYPASSRLS`, table owner, RLS disabled, an open policy).
+
+## Supported versions
+
+| | Versions (each tested in CI) |
+|---|---|
+| Node.js | 22.12+, 24 |
+| NestJS | 11, 12 |
+| Prisma | 7 (with `@prisma/adapter-pg`) |
+| PostgreSQL | tested on 17 |
+
+## Install
+
+```bash
+npm install nestjs-prisma-rls
+```
+
+Peer dependencies: `@nestjs/common`, `@nestjs/core`, `@prisma/client`, `rxjs`.
+
+## Quick start
+
+1. Give every tenant table a `tenantId` column with a database default
+   ([details](#1-tenantid-column-with-a-database-default)):
+
+   ```prisma
+   model Note {
+     id       Int    @id @default(autoincrement())
+     tenantId String @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::uuid")) @db.Uuid
+     title    String
+
+     @@index([tenantId])
+   }
+   ```
+
+2. Enable RLS with a policy in the migration SQL
+   ([details](#2-rls-policy-add-by-hand-to-the-migration-sql)):
+
+   ```sql
+   ALTER TABLE "Note" ENABLE ROW LEVEL SECURITY;
+   CREATE POLICY tenant_isolation ON "Note"
+     USING ("tenantId" = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+     WITH CHECK ("tenantId" = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+   ```
+
+3. Connect the app as a role that is **not** a superuser, not the table owner,
+   and has no `BYPASSRLS` ([details](#3-database-roles)).
+
+4. Register the module:
+
+   ```ts
+   @Module({
+     imports: [
+       PrismaRlsModule.forRoot({
+         tenantFrom: (req) => req.user?.tenantId, // set by your AuthGuard
+         client: () => new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) }),
+       }),
+     ],
+   })
+   export class AppModule {}
+   ```
+
+5. Inject and query, with no tenant filter:
+
+   ```ts
+   constructor(@InjectPrismaRls() private readonly prisma: AppPrisma) {}
+
+   findAll() {
+     return this.prisma.note.findMany(); // only the current tenant's notes
+   }
+   ```
+
+For jobs, cron and scripts, wrap the code in `runWithTenant(tenantId, () => ...)`.
+
+## Security model
+
+What this package does:
+
+- Sets `app.tenant_id` for the current transaction before every query, on the
+  same connection, so the RLS policy filters by the current tenant.
+- Throws instead of querying when there is no tenant (`MissingTenantError`),
+  and refuses to switch tenants inside a tenant context (`TenantSwitchError`).
+- Checks roles, RLS and policies at startup.
+
+What it does **not** do, and you must:
+
+- **Authenticate the tenant.** RLS protects the tenant it is given. `tenantFrom`
+  must return a verified value (e.g. from a validated JWT), never a raw header.
+- **Write correct policies.** The startup check is a text heuristic; test that
+  tenant A cannot read, update, delete or insert tenant B's rows in your app.
+- **Cover every table.** Each tenant table needs its own `tenantId` column and policy.
+- **Use the admin client carefully.** `@InjectPrismaRlsAdmin()` bypasses
+  isolation; never return its results directly to tenant users.
+- Raw SQL outside a transaction runs without a tenant (it returns no rows rather
+  than leaking). Run raw SQL on `tx` inside `prisma.$transaction`.
+
 
 ## Schema setup
 
@@ -68,9 +169,9 @@ RLS does **not** apply to superusers or to the table owner. Use two roles:
 ## Usage
 
 ```ts
-import { rowguardExtension, runWithTenant } from 'rowguard';
+import { prismaRlsExtension, runWithTenant } from 'nestjs-prisma-rls';
 
-const prisma = new PrismaClient({ adapter }).$extends(rowguardExtension());
+const prisma = new PrismaClient({ adapter }).$extends(prismaRlsExtension());
 
 await runWithTenant(tenantId, () => prisma.note.findMany()); // only this tenant's rows
 ```
@@ -90,9 +191,9 @@ await runWithTenant(tenantId, () =>
 
 The tenant is set once at the start of your transaction. Rules:
 
-- **Add rowguard as the last extension.** `tx` comes from the client below
-  rowguard, so extensions added after it are missing on `tx` at runtime.
-  `base.$extends(other).$extends(rowguardExtension())` is correct.
+- **Add nestjs-prisma-rls as the last extension.** `tx` comes from the client below
+  nestjs-prisma-rls, so extensions added after it are missing on `tx` at runtime.
+  `base.$extends(other).$extends(prismaRlsExtension())` is correct.
 - **Use `tx`, not `prisma`, inside the callback.** A query on the outer
   `prisma` still gets the right tenant, but runs in its own transaction and
   is not rolled back with yours.
@@ -104,7 +205,7 @@ The tenant is set once at the start of your transaction. Rules:
 ```ts
 @Module({
   imports: [
-    RowguardModule.forRoot({
+    PrismaRlsModule.forRoot({
       tenantFrom: (req) => req.user?.tenantId, // set by your AuthGuard
       client: () => new PrismaClient({ adapter }),
     }),
@@ -114,16 +215,16 @@ export class AppModule {}
 ```
 
 `forRootAsync({ imports, inject, useFactory })` is available too (e.g. with `ConfigService`).
-rowguard adds its Prisma extension itself, always last. Add your own extensions
+nestjs-prisma-rls adds its Prisma extension itself, always last. Add your own extensions
 inside `client()`.
 
 ```ts
-const extend = (c: PrismaClient) => c.$extends(rowguardExtension());
+const extend = (c: PrismaClient) => c.$extends(prismaRlsExtension());
 export type AppPrisma = ReturnType<typeof extend>;
 
 @Injectable()
 export class NotesService {
-  constructor(@InjectRowguard() private readonly prisma: AppPrisma) {}
+  constructor(@InjectPrismaRls() private readonly prisma: AppPrisma) {}
   findAll() {
     return this.prisma.note.findMany(); // no tenantId anywhere
   }
@@ -141,7 +242,7 @@ export class NotesService {
 
 ### Startup check
 
-At startup `RowguardModule` inspects the database (read-only, catalog queries)
+At startup `PrismaRlsModule` inspects the database (read-only, catalog queries)
 and by default **refuses to start** if tenant isolation is off:
 
 | Problem | Level |
@@ -155,7 +256,7 @@ and by default **refuses to start** if tenant isolation is off:
 | No tenant tables found (wrong `tenantColumn` or schema?) | warn |
 
 ```ts
-RowguardModule.forRoot({
+PrismaRlsModule.forRoot({
   tenantFrom: (req) => req.user?.tenantId,
   client: () => new PrismaClient({ adapter }),
   startupCheck: 'error',      // default; 'warn' only logs, 'off' skips
@@ -175,9 +276,9 @@ RowguardModule.forRoot({
   has no isolation.
 - `excludeTables` is for tables like `User` that guards read before the tenant
   is known. Excluded tables are skipped but logged once at startup.
-- `RowguardAdminModule` logs a warning if the admin role lacks `BYPASSRLS`
+- `PrismaRlsAdminModule` logs a warning if the admin role lacks `BYPASSRLS`
   (or is a superuser).
-- Without Nest: `checkRowguardSetup(prisma)` and `checkRowguardAdminSetup(adminPrisma)`
+- Without Nest: `checkPrismaRlsSetup(prisma)` and `checkPrismaRlsAdminSetup(adminPrisma)`
   return the issues, e.g. for a CI step.
 
 ### Admin (bypass) client
@@ -187,9 +288,9 @@ connection** as a role with `BYPASSRLS`. Postgres enforces the bypass by role,
 so normal app code (even with SQL injection) cannot turn itself into it.
 
 ```sql
-CREATE ROLE rowguard_admin LOGIN PASSWORD '...' NOSUPERUSER BYPASSRLS;
-GRANT USAGE ON SCHEMA public TO rowguard_admin;
-GRANT SELECT, UPDATE ON "Note" TO rowguard_admin; -- only what admin code needs
+CREATE ROLE rls_admin LOGIN PASSWORD '...' NOSUPERUSER BYPASSRLS;
+GRANT USAGE ON SCHEMA public TO rls_admin;
+GRANT SELECT, UPDATE ON "Note" TO rls_admin; -- only what admin code needs
 ```
 
 `BYPASSRLS` skips policies, not privileges: grant the least you need.
@@ -197,13 +298,13 @@ GRANT SELECT, UPDATE ON "Note" TO rowguard_admin; -- only what admin code needs
 ```ts
 @Module({
   imports: [
-    RowguardModule.forRoot({
+    PrismaRlsModule.forRoot({
       tenantFrom: (req) => req.user?.tenantId,
       client: () => new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) }),
     }),
-    RowguardAdminModule.forRoot({
+    PrismaRlsAdminModule.forRoot({
       client: () =>
-        new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.ROWGUARD_ADMIN_DATABASE_URL }) }),
+        new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.PRISMA_RLS_ADMIN_DATABASE_URL }) }),
     }),
   ],
 })
@@ -211,20 +312,20 @@ export class AppModule {}
 
 @Injectable()
 export class AdminReportService {
-  constructor(@InjectRowguardAdmin() private readonly adminDb: PrismaClient) {}
+  constructor(@InjectPrismaRlsAdmin() private readonly adminDb: PrismaClient) {}
 }
 ```
 
-- Keep the admin credentials in their own variable (`ROWGUARD_ADMIN_DATABASE_URL`),
+- Keep the admin credentials in their own variable (`PRISMA_RLS_ADMIN_DATABASE_URL`),
   never in `DATABASE_URL`.
 - **Never return admin client results directly to tenant users.** The admin
   client sees every tenant. The main remaining risk is a human using
-  `@InjectRowguardAdmin()` in a normal endpoint; review every use of it.
-- `RowguardAdminModule` is opt-in. Without it, `@InjectRowguardAdmin()` makes
+  `@InjectPrismaRlsAdmin()` in a normal endpoint; review every use of it.
+- `PrismaRlsAdminModule` is opt-in. Without it, `@InjectPrismaRlsAdmin()` makes
   the app fail at boot, not at runtime.
 - It works inside a tenant request (it is not tenant-scoped at all).
-- Without Nest: create a second `PrismaClient` with `ROWGUARD_ADMIN_DATABASE_URL`
-  and do not add `rowguardExtension()` to it.
+- Without Nest: create a second `PrismaClient` with `PRISMA_RLS_ADMIN_DATABASE_URL`
+  and do not add `prismaRlsExtension()` to it.
 
 ## Performance
 
@@ -240,20 +341,20 @@ of 1 (counted at the driver): `BEGIN`, `set_config`, the query, `COMMIT`.
 |---|---|---|
 | Plain Prisma read (no RLS) | 0.98 ms | baseline |
 | RLS policy only (tenant already set) | 0.99 ms | +0.00 ms (within noise) |
-| rowguard read, one query per call | 3.76 ms | **+2.78 ms, ~3.8x** |
-| rowguard read, 10 queries in one `$transaction` | 1.46 ms | +0.48 ms (within noise) |
+| nestjs-prisma-rls read, one query per call | 3.76 ms | **+2.78 ms, ~3.8x** |
+| nestjs-prisma-rls read, 10 queries in one `$transaction` | 1.46 ms | +0.48 ms (within noise) |
 | Plain Prisma create | 2.96 ms | baseline |
-| rowguard create, one per call | 5.29 ms | **+2.34 ms** |
-| rowguard create, 10 in one `$transaction` | 1.99 ms | faster than baseline* |
+| nestjs-prisma-rls create, one per call | 5.29 ms | **+2.34 ms** |
+| nestjs-prisma-rls create, 10 in one `$transaction` | 1.99 ms | faster than baseline* |
 
-* Not a rowguard speedup: 10 inserts share one `COMMIT` (one disk flush) instead of 10.
+* Not a nestjs-prisma-rls speedup: 10 inserts share one `COMMIT` (one disk flush) instead of 10.
 
-Throughput (50 concurrent workers, pool of 10): plain reads **7700/s**, rowguard
-one-query-per-call **542/s** (about 14x lower), rowguard in `$transaction`
+Throughput (50 concurrent workers, pool of 10): plain reads **7700/s**, nestjs-prisma-rls
+one-query-per-call **542/s** (about 14x lower), nestjs-prisma-rls in `$transaction`
 batches of 10 **2227/s**. The drop is larger than the latency ratio. A Prisma
-batch transaction of two statements *without* rowguard reached a similar rate
+batch transaction of two statements *without* nestjs-prisma-rls reached a similar rate
 in a separate run, so the cost comes from the transaction-per-query mechanism
-rowguard relies on; the exact reason it is worse than linear was not determined.
+nestjs-prisma-rls relies on; the exact reason it is worse than linear was not determined.
 
 What this means:
 
@@ -266,11 +367,11 @@ What this means:
   one `set_config` and one `BEGIN`/`COMMIT` for all of them.
 - Size your connection pool for connections being held ~4x longer.
 - `set_config(..., true)` is transaction-scoped: the tenant is gone after
-  `COMMIT` (tested). This makes rowguard compatible with **PgBouncer in
+  `COMMIT` (tested). This makes nestjs-prisma-rls compatible with **PgBouncer in
   transaction mode**, where consecutive transactions may run on different
   server connections.
 
-## Known limitations (v0.1, in progress)
+## Known limitations (v0.1)
 
 - Batch `$transaction([...])` is not supported; use the interactive form.
 - `$queryRaw` / `$executeRaw` are not wrapped: outside a transaction they run

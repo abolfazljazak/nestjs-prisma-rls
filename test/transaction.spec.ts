@@ -1,12 +1,14 @@
-// The user's own prisma.$transaction(...) with rowguard.
+// The user's own prisma.$transaction(...) with nestjs-prisma-rls.
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Prisma } from '@prisma/client/extension';
-import { MissingTenantError, rowguardExtension, runWithTenant, TenantSwitchError } from '../src';
+import { MissingTenantError, prismaRlsExtension, runWithTenant, TenantSwitchError } from '../src';
+import { createTestTenants, deleteTenantData, dropTestTenants } from './helpers';
 import { PrismaClient } from './prisma/generated/client';
 
 const DB = 'localhost:54329/rowguard_prisma';
-const TENANT_A = '11111111-1111-1111-1111-111111111111';
-const TENANT_B = '22222222-2222-2222-2222-222222222222';
+// Random per file (see helpers.ts), so files can run in parallel.
+let TENANT_A: string;
+let TENANT_B: string;
 
 const admin = new PrismaClient({
   adapter: new PrismaPg({ connectionString: `postgresql://postgres:postgres@${DB}` }),
@@ -15,24 +17,18 @@ const admin = new PrismaClient({
 const base = new PrismaClient({
   adapter: new PrismaPg({ connectionString: `postgresql://app_user:app_user@${DB}`, max: 1 }),
 });
-const prisma = base.$extends(rowguardExtension());
+const prisma = base.$extends(prismaRlsExtension());
 
 const asA = <T>(fn: () => Promise<T>) => runWithTenant(TENANT_A, fn);
 const countA = () => admin.note.count({ where: { tenantId: TENANT_A } });
 
 beforeAll(async () => {
-  await admin.tenant.createMany({
-    data: [
-      { id: TENANT_A, name: 'A' },
-      { id: TENANT_B, name: 'B' },
-    ],
-    skipDuplicates: true,
-  });
+  [TENANT_A, TENANT_B] = await createTestTenants(admin, 'transaction');
 });
 
 beforeEach(async () => {
   // As the superuser (table owner), not app_user: RLS would hide rows from app_user.
-  await admin.$executeRaw`TRUNCATE "Comment", "Note" RESTART IDENTITY CASCADE`;
+  await deleteTenantData(admin, [TENANT_A, TENANT_B]);
   await admin.note.createMany({
     data: [
       { tenantId: TENANT_A, title: 'a1' },
@@ -42,6 +38,7 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
+  await dropTestTenants(admin, [TENANT_A, TENANT_B]);
   await base.$disconnect();
   await admin.$disconnect();
 });
@@ -112,7 +109,7 @@ describe('interactive $transaction', () => {
     const base2 = new PrismaClient({
       adapter: new PrismaPg({ connectionString: `postgresql://app_user:app_user@${DB}`, max: 2 }),
     });
-    const prisma2 = base2.$extends(rowguardExtension());
+    const prisma2 = base2.$extends(prismaRlsExtension());
     try {
       await expect(
         asA(() =>
@@ -140,7 +137,7 @@ describe('batch $transaction', () => {
 });
 
 describe('tx type', () => {
-  // An extension added BEFORE rowguard (the supported order).
+  // An extension added BEFORE nestjs-prisma-rls (the supported order).
   const withHelpers = base.$extends({
     model: {
       note: {
@@ -152,9 +149,9 @@ describe('tx type', () => {
       },
     },
   });
-  const prismaH = withHelpers.$extends(rowguardExtension());
+  const prismaH = withHelpers.$extends(prismaRlsExtension());
 
-  it('keeps methods from extensions added before rowguard, at compile time and runtime', async () => {
+  it('keeps methods from extensions added before nestjs-prisma-rls, at compile time and runtime', async () => {
     const titles = await asA(() =>
       prismaH.$transaction(async (tx) => {
         const t: string[] = await tx.note.titles(); // compile-time: method exists, typed

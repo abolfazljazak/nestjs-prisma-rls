@@ -1,10 +1,26 @@
 {
-  "name": "rowguard",
+  "name": "nestjs-prisma-rls",
   "version": "0.1.0",
-  "description": "Postgres Row-Level Security multi-tenancy for NestJS + Prisma",
+  "description": "Multi-tenant isolation for NestJS + Prisma, enforced by Postgres Row-Level Security",
   "license": "MIT",
+  "author": "Abolfazl Jazak",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/abolfazljazak/nestjs-prisma-rls.git"
+  },
+  "homepage": "https://github.com/abolfazljazak/nestjs-prisma-rls#readme",
+  "bugs": {
+    "url": "https://github.com/abolfazljazak/nestjs-prisma-rls/issues"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
     "dist"
   ],
@@ -12,21 +28,25 @@
     "node": ">=22.12"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json",
     "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "prepublishOnly": "npm run build",
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down",
     "pretest": "prisma generate",
     "db:reset": "prisma migrate reset --force",
-    "bench": "tsx bench/bench.ts"
+    "bench": "tsx bench/bench.ts",
+    "test:pack": "npm run build && tsx scripts/pack-smoke.ts"
   },
   "keywords": [
     "nestjs",
     "prisma",
     "postgres",
+    "postgresql",
     "rls",
-    "multi-tenant"
+    "row-level-security",
+    "multi-tenant",
+    "multitenancy"
   ],
   "peerDependencies": {
     "@nestjs/common": "^11.0.0 || ^12.0.0",

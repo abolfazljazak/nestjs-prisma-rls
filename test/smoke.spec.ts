@@ -1,5 +1,5 @@
-import * as rowguard from '../src';
+import * as prismaRls from '../src';
 
 it('loads the package entry point', () => {
-  expect(rowguard).toBeDefined();
+  expect(prismaRls).toBeDefined();
 });

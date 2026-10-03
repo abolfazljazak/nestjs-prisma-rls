@@ -1,14 +1,17 @@
-// Startup checks against real misconfigurations, each built in its own schema
-// so they don't touch the tables other tests use.
+// Startup checks against real misconfigurations. Each scenario gets a NEW
+// schema (never re-created under the same name) so it can't touch other tests'
+// tables or see a previous scenario's objects.
 import 'reflect-metadata';
 import { Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { PrismaPg } from '@prisma/adapter-pg';
-import { checkRowguardAdminSetup, checkRowguardSetup, RowguardModule } from '../src';
+import { checkPrismaRlsAdminSetup, checkPrismaRlsSetup, PrismaRlsModule } from '../src';
 import { PrismaClient } from './prisma/generated/client';
 
 const DB = 'localhost:54329/rowguard_prisma';
-const SCHEMA = 'startup_check';
+const SCHEMA_PREFIX = 'startup_check_';
+let schemaN = 0;
+let SCHEMA = '';
 const TENANT_POLICY = `USING ("tenantId" = NULLIF(current_setting('app.tenant_id', true), '')::uuid)`;
 
 const connect = (user: string) =>
@@ -22,19 +25,21 @@ const adminUser = connect('rowguard_admin');
 const scOwner = connect('sc_owner'); // owns the tables in the scenarios below
 const scMember = connect('sc_member'); // member of sc_owner, inherits its privileges
 
-// Rebuild the schema with only the tables a test needs. Runs as the superuser.
+// A fresh schema with only the tables a test needs. Runs as the superuser,
+// in one transaction; SET LOCAL keeps search_path off the pooled connection.
 async function scenario(sql: string) {
-  await owner.$executeRawUnsafe(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
-  await owner.$executeRawUnsafe(`CREATE SCHEMA ${SCHEMA}`);
-  await owner.$executeRawUnsafe(
-    `GRANT USAGE ON SCHEMA ${SCHEMA} TO app_user, rowguard_admin, sc_owner, sc_member`,
-  );
-  for (const statement of sql.split(';').filter((s) => s.trim())) {
-    await owner.$executeRawUnsafe(`SET search_path = ${SCHEMA}; ${statement}`);
-  }
+  SCHEMA = `${SCHEMA_PREFIX}${process.pid}_${++schemaN}`;
+  await owner.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(`CREATE SCHEMA ${SCHEMA}`);
+    await tx.$executeRawUnsafe(`GRANT USAGE ON SCHEMA ${SCHEMA} TO app_user, rowguard_admin, sc_owner, sc_member`);
+    await tx.$executeRawUnsafe(`SET LOCAL search_path TO ${SCHEMA}`);
+    for (const statement of sql.split(';').filter((s) => s.trim())) {
+      await tx.$executeRawUnsafe(statement);
+    }
+  });
 }
 
-const check = (client: PrismaClient, options = {}) => checkRowguardSetup(client, { schema: SCHEMA, ...options });
+const check = (client: PrismaClient, options = {}) => checkPrismaRlsSetup(client, { schema: SCHEMA, ...options });
 const codes = (r: { issues: { code: string }[] }) => r.issues.map((i) => i.code);
 
 beforeAll(async () => {
@@ -51,7 +56,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await owner.$executeRawUnsafe(`DROP SCHEMA IF EXISTS ${SCHEMA} CASCADE`);
+  const schemas = await owner.$queryRawUnsafe<{ nspname: string }[]>(
+    `SELECT nspname FROM pg_namespace WHERE nspname LIKE '${SCHEMA_PREFIX}${process.pid}_%'`,
+  );
+  for (const { nspname } of schemas) await owner.$executeRawUnsafe(`DROP SCHEMA ${nspname} CASCADE`);
   await Promise.all([owner, appUser, adminUser, scOwner, scMember].map((c) => c.$disconnect()));
 });
 
@@ -168,23 +176,23 @@ describe('tables', () => {
 
 describe('admin role', () => {
   it('BYPASSRLS role: no issues', async () => {
-    expect(await checkRowguardAdminSetup(adminUser)).toEqual([]);
+    expect(await checkPrismaRlsAdminSetup(adminUser)).toEqual([]);
   });
 
   it('role without BYPASSRLS: warn', async () => {
-    expect((await checkRowguardAdminSetup(appUser)).map((i) => i.code)).toEqual(['ADMIN_NO_BYPASSRLS']);
+    expect((await checkPrismaRlsAdminSetup(appUser)).map((i) => i.code)).toEqual(['ADMIN_NO_BYPASSRLS']);
   });
 
   it('superuser: warn (more privilege than needed)', async () => {
-    expect((await checkRowguardAdminSetup(owner)).map((i) => i.code)).toEqual(['ADMIN_SUPERUSER']);
+    expect((await checkPrismaRlsAdminSetup(owner)).map((i) => i.code)).toEqual(['ADMIN_SUPERUSER']);
   });
 });
 
-describe('RowguardModule startup', () => {
+describe('PrismaRlsModule startup', () => {
   const boot = async (user: string, options: object) => {
     const moduleRef = await Test.createTestingModule({
       imports: [
-        RowguardModule.forRoot({
+        PrismaRlsModule.forRoot({
           tenantFrom: () => undefined,
           client: () => connect(user),
           schema: SCHEMA,

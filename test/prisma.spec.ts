@@ -1,11 +1,13 @@
-// Isolation tests through Prisma + rowguardExtension, as `app_user` (RLS applies).
+// Isolation tests through Prisma + prismaRlsExtension, as `app_user` (RLS applies).
 import { PrismaPg } from '@prisma/adapter-pg';
-import { MissingTenantError, rowguardExtension, runWithTenant } from '../src';
+import { MissingTenantError, prismaRlsExtension, runWithTenant } from '../src';
+import { createTestTenants, deleteTenantData, dropTestTenants } from './helpers';
 import { PrismaClient } from './prisma/generated/client';
 
 const DB = 'localhost:54329/rowguard_prisma';
-const TENANT_A = '11111111-1111-1111-1111-111111111111';
-const TENANT_B = '22222222-2222-2222-2222-222222222222';
+// Random per file (see helpers.ts), so files can run in parallel.
+let TENANT_A: string;
+let TENANT_B: string;
 
 // Superuser client without the extension: seeds and inspects, bypassing RLS.
 const admin = new PrismaClient({
@@ -17,23 +19,17 @@ const admin = new PrismaClient({
 const base = new PrismaClient({
   adapter: new PrismaPg({ connectionString: `postgresql://app_user:app_user@${DB}`, max: 1 }),
 });
-const prisma = base.$extends(rowguardExtension());
+const prisma = base.$extends(prismaRlsExtension());
 
 const asA = <T>(fn: () => Promise<T>) => runWithTenant(TENANT_A, fn);
 
 beforeAll(async () => {
-  await admin.tenant.createMany({
-    data: [
-      { id: TENANT_A, name: 'A' },
-      { id: TENANT_B, name: 'B' },
-    ],
-    skipDuplicates: true,
-  });
+  [TENANT_A, TENANT_B] = await createTestTenants(admin, 'prisma');
 });
 
 beforeEach(async () => {
   // As the superuser (table owner), not app_user: RLS would hide rows from app_user.
-  await admin.$executeRaw`TRUNCATE "Comment", "Note" RESTART IDENTITY CASCADE`;
+  await deleteTenantData(admin, [TENANT_A, TENANT_B]);
   await admin.note.createMany({
     data: [
       { tenantId: TENANT_A, title: 'a1' },
@@ -44,6 +40,7 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
+  await dropTestTenants(admin, [TENANT_A, TENANT_B]);
   await base.$disconnect();
   await admin.$disconnect();
 });
@@ -71,7 +68,7 @@ describe('writes to another tenant', () => {
   });
 
   it('update by id fails as "not found"', async () => {
-    const b1 = await admin.note.findFirstOrThrow({ where: { title: 'b1' } });
+    const b1 = await admin.note.findFirstOrThrow({ where: { tenantId: TENANT_B, title: 'b1' } });
     await expect(asA(() => prisma.note.update({ where: { id: b1.id }, data: { title: 'x' } }))).rejects.toThrow();
     expect(await titlesOf(TENANT_B)).toEqual(['b1']);
   });
@@ -127,7 +124,7 @@ describe('fail closed', () => {
     const evil = `'); DROP TABLE "Note"; --`;
     // Not a valid uuid, so the policy cast fails; the table must survive.
     await expect(runWithTenant(evil, () => prisma.note.findMany())).rejects.toThrow();
-    expect(await admin.note.count()).toBe(3);
+    expect(await admin.note.count({ where: { tenantId: { in: [TENANT_A, TENANT_B] } } })).toBe(3);
   });
 });
 
@@ -139,8 +136,8 @@ it('tenants used one after another on one pooled connection do not leak', async 
 });
 
 it('the tenant setting does not survive COMMIT on the same connection (PgBouncer transaction mode safe)', async () => {
-  await asA(() => prisma.note.findMany()); // rowguard: BEGIN; set_config(..., true); query; COMMIT
-  // Same single pooled connection, now outside any transaction, without rowguard:
+  await asA(() => prisma.note.findMany()); // nestjs-prisma-rls: BEGIN; set_config(..., true); query; COMMIT
+  // Same single pooled connection, now outside any transaction, without nestjs-prisma-rls:
   const [row] = await base.$queryRaw<{ v: string | null }[]>`SELECT current_setting('app.tenant_id', true) AS v`;
   expect(row.v).toBe(''); // defined-but-empty after a local set_config: no tenant left behind
   expect(await base.note.count()).toBe(0); // and RLS shows nothing

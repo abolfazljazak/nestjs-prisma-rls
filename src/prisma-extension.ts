@@ -34,16 +34,16 @@ const setTenant = (client: RawCapableClient, tenantId: string) =>
  * - Model queries: each runs in a short transaction that first sets the tenant:
  *   BEGIN; SELECT set_config('app.tenant_id', $1, true); <query>; COMMIT;
  * - prisma.$transaction(async (tx) => ...): sets the tenant once at the start
- *   of the user's transaction. `tx` comes from the client *below* rowguard,
+ *   of the user's transaction. `tx` comes from the client *below* nestjs-prisma-rls,
  *   so its queries skip our hook and run inside that same transaction.
- *   Add rowguard as the last extension, or later extensions won't be on `tx`.
+ *   Add nestjs-prisma-rls as the last extension, or later extensions won't be on `tx`.
  * - prisma.$transaction([...]) (batch form) is not supported.
  */
-export function rowguardExtension() {
+export function prismaRlsExtension() {
   return Prisma.defineExtension((client) => {
     const raw = client as unknown as RawCapableClient;
     return client.$extends({
-      name: 'rowguard',
+      name: 'nestjs-prisma-rls',
       client: {
         // Replaces Prisma's overloaded $transaction; only the interactive form remains.
         $transaction<This, R>(
@@ -54,7 +54,7 @@ export function rowguardExtension() {
           if (typeof fn !== 'function') {
             // Array form, e.g. from plain JS or a cast. Must return a rejected promise.
             return Promise.reject(
-              new Error('rowguard: batch transactions are not supported; use the interactive form: prisma.$transaction(async (tx) => ...)'),
+              new Error('nestjs-prisma-rls: batch transactions are not supported; use the interactive form: prisma.$transaction(async (tx) => ...)'),
             );
           }
           let tenantId: string;

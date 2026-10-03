@@ -6,45 +6,41 @@ import { Test } from '@nestjs/testing';
 import { PrismaPg } from '@prisma/adapter-pg';
 import request from 'supertest';
 import {
-  InjectRowguard,
-  InjectRowguardAdmin,
-  rowguardExtension,
-  RowguardAdminModule,
-  RowguardModule,
+  InjectPrismaRls,
+  InjectPrismaRlsAdmin,
+  prismaRlsExtension,
+  PrismaRlsAdminModule,
+  PrismaRlsModule,
   runWithTenant,
 } from '../src';
+import { createTestTenants, deleteTenantData, dropTestTenants } from './helpers';
 import { PrismaClient } from './prisma/generated/client';
 
 const DB = 'localhost:54329/rowguard_prisma';
-const TENANT_A = '11111111-1111-1111-1111-111111111111';
-const TENANT_B = '22222222-2222-2222-2222-222222222222';
+// Random per file (see helpers.ts), so files can run in parallel.
+let TENANT_A: string;
+let TENANT_B: string;
 
 // Same convention as the README: separate env variables for the two roles.
 const DATABASE_URL = process.env.DATABASE_URL_APP ?? `postgresql://app_user:app_user@${DB}`;
-const ROWGUARD_ADMIN_DATABASE_URL =
-  process.env.ROWGUARD_ADMIN_DATABASE_URL ?? `postgresql://rowguard_admin:rowguard_admin@${DB}`;
+const PRISMA_RLS_ADMIN_DATABASE_URL =
+  process.env.PRISMA_RLS_ADMIN_DATABASE_URL ?? `postgresql://rowguard_admin:rowguard_admin@${DB}`;
 
 const owner = new PrismaClient({
   adapter: new PrismaPg({ connectionString: `postgresql://postgres:postgres@${DB}` }),
 });
-const newAdminClient = () => new PrismaClient({ adapter: new PrismaPg({ connectionString: ROWGUARD_ADMIN_DATABASE_URL }) });
+const newAdminClient = () => new PrismaClient({ adapter: new PrismaPg({ connectionString: PRISMA_RLS_ADMIN_DATABASE_URL }) });
 
-const extend = (c: PrismaClient) => c.$extends(rowguardExtension());
+const extend = (c: PrismaClient) => c.$extends(prismaRlsExtension());
 type AppPrisma = ReturnType<typeof extend>;
 
 beforeAll(async () => {
-  await owner.tenant.createMany({
-    data: [
-      { id: TENANT_A, name: 'A' },
-      { id: TENANT_B, name: 'B' },
-    ],
-    skipDuplicates: true,
-  });
+  [TENANT_A, TENANT_B] = await createTestTenants(owner, 'admin');
 });
 
 beforeEach(async () => {
   // As the superuser (table owner), not app_user: RLS would hide rows from app_user.
-  await owner.$executeRaw`TRUNCATE "Comment", "Note" RESTART IDENTITY CASCADE`;
+  await deleteTenantData(owner, [TENANT_A, TENANT_B]);
   await owner.note.createMany({
     data: [
       { tenantId: TENANT_A, title: 'a1' },
@@ -53,23 +49,30 @@ beforeEach(async () => {
   });
 });
 
-afterAll(() => owner.$disconnect());
+afterAll(async () => {
+  await dropTestTenants(owner, [TENANT_A, TENANT_B]);
+  await owner.$disconnect();
+});
+
+// The admin client sees every tenant, including other test files' data:
+// always count only this file's tenants.
+const ownTenants = () => ({ where: { tenantId: { in: [TENANT_A, TENANT_B] } } });
 
 describe('admin client (no Nest)', () => {
   const adminDb = newAdminClient();
   afterAll(() => adminDb.$disconnect());
 
   it('sees every tenant, without any tenant context', async () => {
-    expect(await adminDb.note.count()).toBe(2);
+    expect(await adminDb.note.count(ownTenants())).toBe(2);
   });
 
   it('works inside a tenant context (no TenantSwitchError, no filtering)', async () => {
-    expect(await runWithTenant(TENANT_A, () => adminDb.note.count())).toBe(2);
+    expect(await runWithTenant(TENANT_A, () => adminDb.note.count(ownTenants()))).toBe(2);
   });
 
   it('is still limited by GRANTs: BYPASSRLS skips policies, not privileges', async () => {
-    await expect(adminDb.note.deleteMany()).rejects.toThrow(/permission denied|denied/i);
-    expect(await owner.note.count()).toBe(2);
+    await expect(adminDb.note.deleteMany(ownTenants())).rejects.toThrow(/permission denied|denied/i);
+    expect(await owner.note.count(ownTenants())).toBe(2);
   });
 });
 
@@ -87,33 +90,33 @@ class FakeAuthGuard implements CanActivate {
 @Controller()
 class ReportController {
   constructor(
-    @InjectRowguard() private readonly prisma: AppPrisma,
-    @InjectRowguardAdmin() private readonly adminDb: PrismaClient,
+    @InjectPrismaRls() private readonly prisma: AppPrisma,
+    @InjectPrismaRlsAdmin() private readonly adminDb: PrismaClient,
   ) {}
 
   @Get('report')
   async report() {
     // Same request, same tenant context: the two clients see different data.
-    return { mine: await this.prisma.note.count(), all: await this.adminDb.note.count() };
+    return { mine: await this.prisma.note.count(), all: await this.adminDb.note.count(ownTenants()) };
   }
 
   @Patch('rename-all')
   renameAll() {
-    return this.adminDb.note.updateMany({ data: { title: 'renamed' } });
+    return this.adminDb.note.updateMany({ ...ownTenants(), data: { title: 'renamed' } });
   }
 }
 
-describe('RowguardAdminModule (Nest)', () => {
+describe('PrismaRlsAdminModule (Nest)', () => {
   let app: INestApplication;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [
-        RowguardModule.forRoot({
+        PrismaRlsModule.forRoot({
           tenantFrom: (req) => req.user?.tenantId,
           client: () => new PrismaClient({ adapter: new PrismaPg({ connectionString: DATABASE_URL }) }),
         }),
-        RowguardAdminModule.forRoot({ client: newAdminClient }),
+        PrismaRlsAdminModule.forRoot({ client: newAdminClient }),
       ],
       controllers: [ReportController],
       providers: [{ provide: APP_GUARD, useClass: FakeAuthGuard }],
@@ -135,16 +138,16 @@ describe('RowguardAdminModule (Nest)', () => {
   });
 });
 
-it('without RowguardAdminModule, injecting the admin client fails at boot', async () => {
+it('without PrismaRlsAdminModule, injecting the admin client fails at boot', async () => {
   await expect(
     Test.createTestingModule({
       imports: [
-        RowguardModule.forRoot({
+        PrismaRlsModule.forRoot({
           tenantFrom: (req) => req.user?.tenantId,
           client: () => new PrismaClient({ adapter: new PrismaPg({ connectionString: DATABASE_URL }) }),
         }),
       ],
       controllers: [ReportController],
     }).compile(),
-  ).rejects.toThrow(/ROWGUARD_ADMIN_CLIENT|resolve dependencies/);
+  ).rejects.toThrow(/PRISMA_RLS_ADMIN_CLIENT|resolve dependencies/);
 });

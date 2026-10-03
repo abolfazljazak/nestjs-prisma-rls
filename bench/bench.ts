@@ -1,11 +1,11 @@
-// Benchmark: what does rowguard cost per query?  Run with `npm run bench`.
+// Benchmark: what does nestjs-prisma-rls cost per query?  Run with `npm run bench`.
 // Uses the local test database only. Results go to bench/results.md.
 import { writeFileSync } from 'fs';
 import { cpus, totalmem } from 'os';
 import { join } from 'path';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Pool } from 'pg';
-import { rowguardExtension, runWithTenant } from '../src';
+import { prismaRlsExtension, runWithTenant } from '../src';
 import { assertTestDatabase } from '../test/global-setup';
 import { PrismaClient } from '../test/prisma/generated/client';
 
@@ -43,7 +43,7 @@ const client = (user: string) => new PrismaClient({ adapter: new PrismaPg(counti
 const owner = client('postgres'); // superuser: seeding, and the write baseline
 const admin = client('rowguard_admin'); // BYPASSRLS: read baseline without RLS
 const base = client('app_user');
-const prisma = base.$extends(rowguardExtension());
+const prisma = base.$extends(prismaRlsExtension());
 
 // --- data ------------------------------------------------------------------
 
@@ -114,10 +114,10 @@ const title = () => `bench ${titleN++}`;
 const scenarios: { name: string; what: string; run: () => Promise<Run> }[] = [
   { name: 'A-read', what: 'plain Prisma, BYPASSRLS role, no transaction', run: () => measure(() => admin.note.findUnique({ where: { id: nextId() } })) },
   { name: 'B-read', what: 'RLS only: queries inside one transaction with one set_config', run: measureRlsOnly },
-  { name: 'C-read', what: 'rowguard, one query per call', run: () => measure(() => inTenant(() => prisma.note.findUnique({ where: { id: nextId() } }))) },
+  { name: 'C-read', what: 'nestjs-prisma-rls, one query per call', run: () => measure(() => inTenant(() => prisma.note.findUnique({ where: { id: nextId() } }))) },
   {
     name: 'D-read',
-    what: `rowguard, ${TX_SIZE} queries per user $transaction (per query)`,
+    what: `nestjs-prisma-rls, ${TX_SIZE} queries per user $transaction (per query)`,
     run: () =>
       measure(
         () =>
@@ -130,10 +130,10 @@ const scenarios: { name: string; what: string; run: () => Promise<Run> }[] = [
       ),
   },
   { name: 'A-write', what: 'plain Prisma create, superuser, explicit tenantId', run: () => measure(() => owner.note.create({ data: { tenantId: T, title: title() } })) },
-  { name: 'C-write', what: 'rowguard create (dbgenerated default + WITH CHECK)', run: () => measure(() => inTenant(() => prisma.note.create({ data: { title: title() } }))) },
+  { name: 'C-write', what: 'nestjs-prisma-rls create (dbgenerated default + WITH CHECK)', run: () => measure(() => inTenant(() => prisma.note.create({ data: { title: title() } }))) },
   {
     name: 'D-write',
-    what: `rowguard, ${TX_SIZE} creates per user $transaction (per create)`,
+    what: `nestjs-prisma-rls, ${TX_SIZE} creates per user $transaction (per create)`,
     run: () =>
       measure(
         () =>
@@ -247,7 +247,7 @@ async function main() {
   };
 
   const md = [
-    '# rowguard benchmark results',
+    '# nestjs-prisma-rls benchmark results',
     '',
     `- Date: ${new Date().toISOString().slice(0, 10)}`,
     `- Machine: ${cpus()[0].model}, ${cpus().length} threads, ${Math.round(totalmem() / 2 ** 30)} GB RAM`,
@@ -284,7 +284,7 @@ async function main() {
     '',
     '## Index use with the RLS policy',
     '',
-    'Policy casting the setting (rowguard README form):',
+    'Policy casting the setting (nestjs-prisma-rls README form):',
     '```',
     plans.good,
     '```',

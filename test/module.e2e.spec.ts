@@ -1,4 +1,4 @@
-// End-to-end: a small Nest app using RowguardModule, called over HTTP.
+// End-to-end: a small Nest app using PrismaRlsModule, called over HTTP.
 import 'reflect-metadata';
 import {
   CanActivate,
@@ -16,12 +16,14 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { defer, Observable } from 'rxjs';
 import request from 'supertest';
 import { setTimeout as sleep } from 'timers/promises';
-import { InjectRowguard, rowguardExtension, ROWGUARD_CLIENT, RowguardModule, RowguardModuleOptions } from '../src';
+import { InjectPrismaRls, prismaRlsExtension, PRISMA_RLS_CLIENT, PrismaRlsModule, PrismaRlsModuleOptions } from '../src';
+import { createTestTenants, deleteTenantData, dropTestTenants } from './helpers';
 import { PrismaClient } from './prisma/generated/client';
 
 const DB = 'localhost:54329/rowguard_prisma';
-const TENANT_A = '11111111-1111-1111-1111-111111111111';
-const TENANT_B = '22222222-2222-2222-2222-222222222222';
+// Random per file (see helpers.ts), so files can run in parallel.
+let TENANT_A: string;
+let TENANT_B: string;
 
 const admin = new PrismaClient({
   adapter: new PrismaPg({ connectionString: `postgresql://postgres:postgres@${DB}` }),
@@ -30,7 +32,7 @@ const newAppClient = () =>
   new PrismaClient({ adapter: new PrismaPg({ connectionString: `postgresql://app_user:app_user@${DB}` }) });
 
 // How a user types the injected client.
-const extend = (c: PrismaClient) => c.$extends(rowguardExtension());
+const extend = (c: PrismaClient) => c.$extends(prismaRlsExtension());
 type AppPrisma = ReturnType<typeof extend>;
 
 // Stand-in for a real AuthGuard: sets req.user from a header.
@@ -49,7 +51,7 @@ let handlerCalls = 0;
 
 @Controller()
 class NotesController {
-  constructor(@InjectRowguard() private readonly prisma: AppPrisma) {}
+  constructor(@InjectPrismaRls() private readonly prisma: AppPrisma) {}
 
   @Get('public')
   public() {
@@ -91,10 +93,10 @@ class FakeConfigModule {}
 
 const defaultTenantFrom = (req: any) => req.user?.tenantId;
 
-async function createApp(tenantFrom: RowguardModuleOptions['tenantFrom'] = defaultTenantFrom) {
+async function createApp(tenantFrom: PrismaRlsModuleOptions['tenantFrom'] = defaultTenantFrom) {
   const moduleRef = await Test.createTestingModule({
     imports: [
-      RowguardModule.forRootAsync({
+      PrismaRlsModule.forRootAsync({
         imports: [FakeConfigModule],
         inject: [CONFIG],
         useFactory: (config: { newClient: typeof newAppClient }) => ({
@@ -115,13 +117,7 @@ let app: INestApplication;
 const http = () => request(app.getHttpServer());
 
 beforeAll(async () => {
-  await admin.tenant.createMany({
-    data: [
-      { id: TENANT_A, name: 'A' },
-      { id: TENANT_B, name: 'B' },
-    ],
-    skipDuplicates: true,
-  });
+  [TENANT_A, TENANT_B] = await createTestTenants(admin, 'module');
   app = await createApp();
   // Listen once; otherwise supertest starts the server again for every request.
   await app.listen(0);
@@ -130,7 +126,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   handlerCalls = 0;
   // As the superuser (table owner), not app_user: RLS would hide rows from app_user.
-  await admin.$executeRaw`TRUNCATE "Comment", "Note" RESTART IDENTITY CASCADE`;
+  await deleteTenantData(admin, [TENANT_A, TENANT_B]);
   await admin.note.createMany({
     data: [
       { tenantId: TENANT_A, title: 'a1' },
@@ -141,6 +137,7 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
+  await dropTestTenants(admin, [TENANT_A, TENANT_B]);
   await app.close();
   await admin.$disconnect();
 });
@@ -206,7 +203,7 @@ describe('tenantFrom edge cases', () => {
 
 it('disconnects the client when the app closes', async () => {
   const closingApp = await createApp();
-  const client = closingApp.get(ROWGUARD_CLIENT);
+  const client = closingApp.get(PRISMA_RLS_CLIENT);
   const spy = jest.spyOn(client, '$disconnect');
   await closingApp.close();
   expect(spy).toHaveBeenCalled();

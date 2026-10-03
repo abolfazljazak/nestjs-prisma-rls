@@ -13,8 +13,8 @@ import {
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { Observable, Subscription } from 'rxjs';
 import { tenantStorage } from './context';
-import { rowguardExtension } from './prisma-extension';
-import { checkRowguardSetup, SetupCheckOptions } from './startup-check';
+import { prismaRlsExtension } from './prisma-extension';
+import { checkPrismaRlsSetup, SetupCheckOptions } from './startup-check';
 
 // The parts of a PrismaClient we rely on.
 interface PrismaClientLike {
@@ -22,7 +22,7 @@ interface PrismaClientLike {
   $disconnect: () => Promise<void>;
 }
 
-export interface RowguardModuleOptions extends SetupCheckOptions {
+export interface PrismaRlsModuleOptions extends SetupCheckOptions {
   /**
    * Reads the tenant id from the request. Runs after guards, so `req.user`
    * is available. null/undefined/'' = no tenant: queries will throw.
@@ -30,7 +30,7 @@ export interface RowguardModuleOptions extends SetupCheckOptions {
    * a raw client-controlled header.
    */
   tenantFrom: (req: any) => string | null | undefined;
-  /** Creates the PrismaClient. rowguard adds its extension last. */
+  /** Creates the PrismaClient. nestjs-prisma-rls adds its extension last. */
   client: () => PrismaClientLike;
   /**
    * Database setup check at startup. Default 'error': the app does not start
@@ -40,22 +40,22 @@ export interface RowguardModuleOptions extends SetupCheckOptions {
   startupCheck?: 'error' | 'warn' | 'off';
 }
 
-// Generates RowguardModule.forRoot() and forRootAsync() with the same options.
+// Generates PrismaRlsModule.forRoot() and forRootAsync() with the same options.
 // `isGlobal` (default true): no need to import the module in every feature module.
-const { ConfigurableModuleClass, MODULE_OPTIONS_TOKEN } = new ConfigurableModuleBuilder<RowguardModuleOptions>()
+const { ConfigurableModuleClass, MODULE_OPTIONS_TOKEN } = new ConfigurableModuleBuilder<PrismaRlsModuleOptions>()
   .setClassMethodName('forRoot')
   .setExtras({ isGlobal: true }, (definition, extras) => ({ ...definition, global: extras.isGlobal }))
   .build();
 
 /** DI token of the tenant-aware Prisma client. */
-export const ROWGUARD_CLIENT = Symbol('ROWGUARD_CLIENT');
+export const PRISMA_RLS_CLIENT = Symbol('PRISMA_RLS_CLIENT');
 
-/** Injects the tenant-aware Prisma client: `constructor(@InjectRowguard() prisma: AppPrisma)`. */
-export const InjectRowguard = () => Inject(ROWGUARD_CLIENT);
+/** Injects the tenant-aware Prisma client: `constructor(@InjectPrismaRls() prisma: AppPrisma)`. */
+export const InjectPrismaRls = () => Inject(PRISMA_RLS_CLIENT);
 
 @Injectable()
-export class RowguardInterceptor implements NestInterceptor {
-  constructor(@Inject(MODULE_OPTIONS_TOKEN) private readonly options: RowguardModuleOptions) {}
+export class PrismaRlsInterceptor implements NestInterceptor {
+  constructor(@Inject(MODULE_OPTIONS_TOKEN) private readonly options: PrismaRlsModuleOptions) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     // v0.1 supports HTTP only. Elsewhere there is no context: queries fail closed.
@@ -69,7 +69,7 @@ export class RowguardInterceptor implements NestInterceptor {
       return next.handle(); // public route, or not logged in: no tenant context
     }
     if (typeof tenantId !== 'string') {
-      throw new TypeError('rowguard: tenantFrom must return a string, null or undefined');
+      throw new TypeError('nestjs-prisma-rls: tenantFrom must return a string, null or undefined');
     }
 
     // Subscribe inside run(): the handler executes when subscribed, so it
@@ -88,21 +88,21 @@ export class RowguardInterceptor implements NestInterceptor {
 @Module({
   providers: [
     {
-      provide: ROWGUARD_CLIENT,
+      provide: PRISMA_RLS_CLIENT,
       inject: [MODULE_OPTIONS_TOKEN],
       // Our extension is added here, after anything the user added: always last.
-      useFactory: (options: RowguardModuleOptions) => options.client().$extends(rowguardExtension()),
+      useFactory: (options: PrismaRlsModuleOptions) => options.client().$extends(prismaRlsExtension()),
     },
-    { provide: APP_INTERCEPTOR, useClass: RowguardInterceptor },
+    { provide: APP_INTERCEPTOR, useClass: PrismaRlsInterceptor },
   ],
-  exports: [ROWGUARD_CLIENT],
+  exports: [PRISMA_RLS_CLIENT],
 })
-export class RowguardModule extends ConfigurableModuleClass implements OnModuleInit, OnModuleDestroy {
-  private readonly logger = new Logger('Rowguard');
+export class PrismaRlsModule extends ConfigurableModuleClass implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger('PrismaRls');
 
   constructor(
-    @Inject(ROWGUARD_CLIENT) private readonly client: PrismaClientLike,
-    @Inject(MODULE_OPTIONS_TOKEN) private readonly options: RowguardModuleOptions,
+    @Inject(PRISMA_RLS_CLIENT) private readonly client: PrismaClientLike,
+    @Inject(MODULE_OPTIONS_TOKEN) private readonly options: PrismaRlsModuleOptions,
   ) {
     super();
   }
@@ -113,7 +113,7 @@ export class RowguardModule extends ConfigurableModuleClass implements OnModuleI
     if (mode === 'off') return;
 
     // Raw queries are not hooked by the extension, so no tenant context is needed.
-    const result = await checkRowguardSetup(this.client as any, this.options);
+    const result = await checkPrismaRlsSetup(this.client as any, this.options);
     if (result.excludedTables.length > 0) {
       this.logger.log(`Tables excluded from RLS checks: ${result.excludedTables.join(', ')}`);
     }
@@ -123,7 +123,7 @@ export class RowguardModule extends ConfigurableModuleClass implements OnModuleI
     }
     if (mode === 'error' && errors.length > 0) {
       const list = errors.map((e) => `- ${e.message}`).join('\n');
-      throw new Error(`rowguard: tenant isolation is not enforced:\n${list}`);
+      throw new Error(`nestjs-prisma-rls: tenant isolation is not enforced:\n${list}`);
     }
   }
 

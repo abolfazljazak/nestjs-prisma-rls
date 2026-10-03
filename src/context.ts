@@ -11,8 +11,8 @@ export const tenantStorage = new AsyncLocalStorage<TenantStore>();
 export class MissingTenantError extends Error {
   constructor() {
     super(
-      'rowguard: no tenant in context. Wrap the code in runWithTenant() ' +
-        'or make sure the request passed through RowguardModule.',
+      'nestjs-prisma-rls: no tenant in context. Wrap the code in runWithTenant() ' +
+        'or make sure the request passed through PrismaRlsModule.',
     );
     this.name = 'MissingTenantError';
   }
@@ -21,7 +21,7 @@ export class MissingTenantError extends Error {
 export class TenantSwitchError extends Error {
   constructor(current: string, requested: string) {
     super(
-      `rowguard: cannot switch tenant inside an existing tenant context ` +
+      `nestjs-prisma-rls: cannot switch tenant inside an existing tenant context ` +
         `("${current}" -> "${requested}"). Run tenants sequentially, ` +
         `or use the admin bypass API for cross-tenant work.`,
     );
@@ -36,7 +36,7 @@ export class TenantSwitchError extends Error {
 export function runWithTenant<T>(tenantId: string, fn: () => T): T {
   // Runtime check too: callers from plain JS (or `any`) bypass the type.
   if (typeof tenantId !== 'string' || tenantId.trim() === '') {
-    throw new TypeError('rowguard: tenantId must be a non-empty string');
+    throw new TypeError('nestjs-prisma-rls: tenantId must be a non-empty string');
   }
 
   const current = tenantStorage.getStore();

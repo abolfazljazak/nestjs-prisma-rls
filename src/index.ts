@@ -1,10 +1,10 @@
-// Public API of rowguard.
+// Public API of nestjs-prisma-rls.
 export { runWithTenant, getTenantId, MissingTenantError, TenantSwitchError } from './context';
-export { rowguardExtension } from './prisma-extension';
+export { prismaRlsExtension } from './prisma-extension';
 export type { TransactionClient, TransactionOptions } from './prisma-extension';
-export { RowguardModule, RowguardInterceptor, InjectRowguard, ROWGUARD_CLIENT } from './rowguard.module';
-export type { RowguardModuleOptions } from './rowguard.module';
-export { RowguardAdminModule, InjectRowguardAdmin, ROWGUARD_ADMIN_CLIENT } from './admin.module';
-export type { RowguardAdminModuleOptions } from './admin.module';
-export { checkRowguardSetup, checkRowguardAdminSetup } from './startup-check';
+export { PrismaRlsModule, PrismaRlsInterceptor, InjectPrismaRls, PRISMA_RLS_CLIENT } from './prisma-rls.module';
+export type { PrismaRlsModuleOptions } from './prisma-rls.module';
+export { PrismaRlsAdminModule, InjectPrismaRlsAdmin, PRISMA_RLS_ADMIN_CLIENT } from './admin.module';
+export type { PrismaRlsAdminModuleOptions } from './admin.module';
+export { checkPrismaRlsSetup, checkPrismaRlsAdminSetup } from './startup-check';
 export type { SetupIssue, SetupCheckOptions, SetupCheckResult, IssueLevel } from './startup-check';
