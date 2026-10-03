@@ -52,3 +52,9 @@ it('nested call with a different tenant throws', async () => {
 it.each(['', '   ', undefined, 42])('rejects invalid tenantId %p', (bad) => {
   expect(() => runWithTenant(bad as any, () => 0)).toThrow(TypeError);
 });
+
+it('starts a lazy thenable inside the context (Prisma queries are lazy)', async () => {
+  // Like a PrismaPromise: does nothing until .then() is called.
+  const lazy = { then: (resolve: (v: string) => void) => resolve(getTenantId()) };
+  await expect(runWithTenant('A', () => lazy as unknown as Promise<string>)).resolves.toBe('A');
+});

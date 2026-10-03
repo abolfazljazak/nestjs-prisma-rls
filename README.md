@@ -1,0 +1,93 @@
+# rowguard
+
+Postgres Row-Level Security (RLS) multi-tenancy for NestJS + Prisma.
+You never write `where: { tenantId }`: Postgres enforces tenant isolation itself.
+
+> Status: work in progress (v0.1 not released yet).
+
+## Schema setup
+
+### 1. `tenantId` column with a database default
+
+Postgres fills `tenantId` from the current transaction's tenant, so creates
+(including nested creates, `createMany`, `upsert` and raw SQL) don't need it.
+
+```prisma
+model Note {
+  id       Int    @id @default(autoincrement())
+  tenantId String @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::uuid")) @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id])
+  title    String
+
+  @@index([tenantId])
+}
+```
+
+`prisma.note.create({ data: { title } })` type-checks: because the foreign key
+has a default, Prisma makes the `tenant` relation optional in create inputs.
+
+**Use exactly this expression.** Postgres stores defaults in a normalized form
+(`'app.tenant_id'::text`, `''::text`, extra parentheses). Prisma compares your
+`dbgenerated(...)` string with what Postgres reports, so the short form
+
+```prisma
+@default(dbgenerated("NULLIF(current_setting('app.tenant_id', true), '')::uuid"))
+```
+
+works but makes `prisma migrate dev` generate a new `ALTER COLUMN ... SET DEFAULT`
+migration on every run. For a `text` column, use:
+
+```prisma
+tenantId String @default(dbgenerated("current_setting('app.tenant_id'::text, true)"))
+```
+
+### 2. RLS policy (add by hand to the migration SQL)
+
+Prisma schema cannot express policies. Run `prisma migrate dev --create-only`,
+then append to the generated `migration.sql`:
+
+```sql
+ALTER TABLE "Note" ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON "Note"
+  USING ("tenantId" = NULLIF(current_setting('app.tenant_id', true), '')::uuid)
+  WITH CHECK ("tenantId" = NULLIF(current_setting('app.tenant_id', true), '')::uuid);
+```
+
+- Cast the setting, never the column, so the index on `"tenantId"` is used.
+- `NULLIF`: on a reused pooled connection the setting is `''`, not `NULL`,
+  and `''::uuid` throws. For `text` columns `NULLIF` is not needed.
+
+### 3. Database roles
+
+RLS does **not** apply to superusers or to the table owner. Use two roles:
+
+- a migration role that owns the tables;
+- an app role (`NOSUPERUSER NOBYPASSRLS`, not the owner) with only
+  `SELECT, INSERT, UPDATE, DELETE` grants, plus `USAGE` on the schema.
+
+## Usage
+
+```ts
+import { rowguardExtension, runWithTenant } from 'rowguard';
+
+const prisma = new PrismaClient({ adapter }).$extends(rowguardExtension());
+
+await runWithTenant(tenantId, () => prisma.note.findMany()); // only this tenant's rows
+```
+
+Without a tenant context every query throws `MissingTenantError`.
+
+## Known limitations (v0.1, in progress)
+
+- Calling `prisma.$transaction(...)` yourself is not supported yet.
+- `$queryRaw` / `$executeRaw` are not wrapped: they run without a tenant, so
+  RLS returns no rows (fails closed) rather than leaking.
+- Each query costs extra round trips (`BEGIN`, `set_config`, query, `COMMIT`).
+
+## Development
+
+```bash
+npm run db:up      # Postgres in Docker on port 54329
+npm test           # applies pending migrations, then runs Jest
+npm run db:reset   # DESTRUCTIVE: drops the local test DB schema; run it yourself when a migration changes
+```

@@ -47,7 +47,18 @@ export function runWithTenant<T>(tenantId: string, fn: () => T): T {
     return fn(); // same tenant: keep the existing context
   }
 
-  return tenantStorage.run({ tenantId }, fn);
+  return tenantStorage.run({ tenantId }, () => startInContext(fn()));
+}
+
+// Prisma queries are lazy thenables: `prisma.note.findMany()` does nothing until
+// someone calls `.then()`. With `runWithTenant(id, () => prisma.note.findMany())`
+// the caller's `await` would call `.then()` after run() returned, i.e. outside
+// the tenant context. Calling `.then()` here, inside run(), starts it in context.
+function startInContext<T>(result: T): T {
+  if (result !== null && typeof result === 'object' && typeof (result as any).then === 'function') {
+    return new Promise((resolve, reject) => (result as any).then(resolve, reject)) as T;
+  }
+  return result;
 }
 
 /** Current tenant id, or throws: there is no "unfiltered" fallback. */

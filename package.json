@@ -16,7 +16,9 @@
     "test": "jest",
     "prepublishOnly": "npm run build",
     "db:up": "docker compose up -d --wait",
-    "db:down": "docker compose down"
+    "db:down": "docker compose down",
+    "pretest": "prisma generate",
+    "db:reset": "prisma migrate reset --force"
   },
   "keywords": [
     "nestjs",
@@ -34,6 +36,7 @@
   "devDependencies": {
     "@nestjs/common": "^12.1.2",
     "@nestjs/core": "^12.1.2",
+    "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
     "@types/jest": "^30.0.0",
     "@types/node": "^26.6.4",

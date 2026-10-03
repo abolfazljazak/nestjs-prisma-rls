@@ -3,9 +3,7 @@
 -- That is the only setup where RLS actually applies to the app.
 
 DROP TABLE IF EXISTS "Note";
-DROP ROLE IF EXISTS app_user;
-
-CREATE ROLE app_user LOGIN PASSWORD 'app_user' NOSUPERUSER NOBYPASSRLS;
+-- The app_user role is created by test/global-setup.ts.
 
 CREATE TABLE "Note" (
   id         serial PRIMARY KEY,

@@ -1,0 +1,41 @@
+// Test-only schema. Not shipped with the package.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "./generated"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Not tenant-scoped: the list of tenants itself.
+model Tenant {
+  id       String    @id @default(uuid()) @db.Uuid
+  name     String
+  notes    Note[]
+  comments Comment[]
+}
+
+model Note {
+  id       Int       @id @default(autoincrement())
+  // Filled by Postgres from the transaction's tenant setting.
+  tenantId String    @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::uuid")) @db.Uuid
+  tenant   Tenant    @relation(fields: [tenantId], references: [id])
+  title    String
+  comments Comment[]
+
+  @@index([tenantId])
+}
+
+model Comment {
+  id       Int    @id @default(autoincrement())
+  tenantId String @default(dbgenerated("(NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::uuid")) @db.Uuid
+  tenant   Tenant @relation(fields: [tenantId], references: [id])
+  noteId   Int
+  note     Note   @relation(fields: [noteId], references: [id])
+  body     String
+
+  @@index([tenantId])
+}
