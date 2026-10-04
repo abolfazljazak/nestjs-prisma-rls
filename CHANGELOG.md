@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 (2026-10-04)
 
 - **Security (docs):** foreign keys between tenant tables must be composite,
   `(childFk, tenantId) -> parent(id, tenantId)`. Postgres checks foreign keys

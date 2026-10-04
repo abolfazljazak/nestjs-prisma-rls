@@ -1,6 +1,6 @@
 {
   "name": "nestjs-prisma-rls",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Multi-tenant isolation for NestJS + Prisma, enforced by Postgres Row-Level Security",
   "license": "MIT",
   "author": "Abolfazl Jazak",
